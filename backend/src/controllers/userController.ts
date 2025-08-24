@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import User from '../models/User';
+import Community from '../models/Community';
 import { AuthedRequest } from '../middleware/authMiddleware';
 
 // GET /api/users - List users (optional ?name= to filter)
@@ -64,6 +65,10 @@ export const updateUserProfile = async (req: AuthedRequest, res: Response) => {
       }
     }
 
+    // Capture previous community before update (for membership sync)
+    const prevUser = await User.findById(req.params.id).select('community');
+    const prevCommunityId = prevUser?.community ? String(prevUser.community) : undefined;
+
     // Perform update first
     console.log('[updateUserProfile] update payload:', Object.keys(update));
     let user = await User.findByIdAndUpdate(
@@ -78,6 +83,27 @@ export const updateUserProfile = async (req: AuthedRequest, res: Response) => {
     }
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Synchronize membership arrays on Community when community changed or set
+    if (typeof update.community === 'string' && update.community.trim()) {
+      const newCommunityId = update.community.trim();
+      try {
+        // Add user to new community members (idempotent)
+        await Community.updateOne(
+          { _id: newCommunityId },
+          { $addToSet: { members: user._id } }
+        );
+        // Remove user from previous community if different
+        if (prevCommunityId && prevCommunityId !== newCommunityId) {
+          await Community.updateOne(
+            { _id: prevCommunityId },
+            { $pull: { members: user._id } }
+          );
+        }
+      } catch (e) {
+        console.warn('[updateUserProfile] community membership sync failed:', (e as Error).message);
+      }
     }
     return res.json(user);
   } catch (error: any) {
