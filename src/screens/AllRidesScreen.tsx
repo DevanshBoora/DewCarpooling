@@ -3,9 +3,22 @@ import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity, Activ
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import DewdropCard from '../components/DewdropCard';
-import { Dewdrop, userProfile, communities as mockCommunities } from '../data/mockData';
+import { getMyContext } from '../api/userService';
+import { listRides, Ride } from '../api/rideService';
+
+// Haversine distance calculation
+const distanceKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const R = 6371; // km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round((R * c) * 10) / 10;
+};
 import { api } from '../api/client';
 import { RootStackParamList } from '../types/navigation';
+import { BASE_URL } from '../config';
 
 type AllRidesScreenNavigationProp = StackNavigationProp<RootStackParamList, 'AllRides'>;
 
@@ -13,8 +26,27 @@ interface AllRidesScreenProps {
   navigation: AllRidesScreenNavigationProp;
 }
 
+// Local interface for display data
+interface DewdropDisplay {
+  id: string;
+  driverName: string;
+  driverAvatar: string;
+  from: string;
+  to: string;
+  pricePerKm: number;
+  availableSeats: number;
+  date: string;
+  time: string;
+  duration: string;
+  rating: number;
+  dewdropType: string;
+  carModel: string;
+  distance: number;
+  status: 'upcoming' | 'completed' | 'cancelled';
+}
+
 const AllRidesScreen: React.FC<AllRidesScreenProps> = ({ navigation }) => {
-  const [dewdrops, setDewdrops] = useState<Dewdrop[]>([]);
+  const [dewdrops, setDewdrops] = useState<DewdropDisplay[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,42 +56,75 @@ const AllRidesScreen: React.FC<AllRidesScreenProps> = ({ navigation }) => {
         setLoading(true);
         setError(null);
 
-        // 1) Get community by name based on userProfile.communityId from mock data
-        const desiredCommunityName = mockCommunities[userProfile.communityId as keyof typeof mockCommunities].name;
-        const communities = await api.get<any[]>(`/api/communities`);
-        const community = (communities as any[]).find(c => c.name === desiredCommunityName) || communities[0];
-        if (!community?._id) throw new Error('No community found');
+        // Get current user's community and load rides
+        const { communityId } = await getMyContext();
+        if (!communityId) throw new Error('No community found');
+        const rides = await listRides(communityId);
 
-        // 2) Load rides for that community
-        const rides = await api.get<any[]>(`/api/rides?community=${community._id}`);
+        // Get Gauthami Enclave coordinates for distance calculation
+        let enclaveLat: number | null = null;
+        let enclaveLng: number | null = null;
+        try {
+          const places = await api.get<any[]>(`/api/communities/${encodeURIComponent(communityId)}/places`);
+          const norm = (s: string) => (s || '').trim().toLowerCase();
+          const exact = (places || []).find(p => typeof p?.name === 'string' && norm(p.name) === 'gauthami enclave');
+          const partial = (places || []).find(p => typeof p?.name === 'string' && norm(p.name).includes('gauthami'));
+          const target = exact || partial;
+          if (target?.location && typeof target.location.lat === 'number' && typeof target.location.lng === 'number') {
+            enclaveLat = target.location.lat;
+            enclaveLng = target.location.lng;
+          }
+        } catch {}
 
-        // 3) Map rides -> Dewdrop
-        const mapped: Dewdrop[] = (rides as any[]).map((r) => {
+        // Map rides to display format
+        const mapped = (rides as Ride[]).map((r) => {
           const departure = r.departureTime ? new Date(r.departureTime) : new Date();
           const timeStr = departure.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const dropName = r.dropoffLocation?.name || 'Destination';
           const driverName = r.owner?.name || 'Driver';
-          const driverAvatar = r.owner?.avatar || 'https://randomuser.me/api/portraits/men/32.jpg';
+          // Normalize avatar: support ObjectId or relative paths from backend
+          const rawAvatar = (r.owner as any)?.avatar?.trim?.() || '';
+          const isObjectId = /^[a-f\d]{24}$/i.test(rawAvatar);
+          const normalizedPath = isObjectId
+            ? `/api/files/${rawAvatar}`
+            : (rawAvatar.startsWith('/') ? rawAvatar : rawAvatar);
+          const absoluteAvatar = rawAvatar
+            ? (rawAvatar.startsWith('http://') || rawAvatar.startsWith('https://') || rawAvatar.startsWith('data:')
+                ? rawAvatar
+                : `${BASE_URL}${normalizedPath.startsWith('/') ? '' : '/'}${normalizedPath}`)
+            : '';
+          const driverAvatar = absoluteAvatar || `https://ui-avatars.com/api/?background=3c7d68&color=fff&name=${encodeURIComponent(driverName)}`;
           const participants = Array.isArray(r.participants) ? r.participants.length : 0;
-          const availableSeats = Math.max(0, 4 - participants); // simple placeholder logic
-          const mappedStatus: Dewdrop['status'] = r.status === 'active' ? 'upcoming' : (r.status as 'completed' | 'cancelled');
+          const availableSeats = Math.max(0, (r.capacity || 4) - participants);
+          const mappedStatus: DewdropDisplay['status'] = r.status === 'active' ? 'upcoming' : (r.status as 'completed' | 'cancelled');
           return {
             id: r._id,
             driverName,
             driverAvatar,
             from: r.pickupLocation?.name || 'Pickup',
             to: dropName,
-            pricePerKm: 7,
+            pricePerKm: r.price || 0,
             availableSeats,
             date: departure.toISOString().slice(0, 10),
             time: timeStr,
             duration: '30 min',
-            rating: r.owner?.rating ?? 4.8,
+            rating: (r.owner as any)?.rating ?? 4.8,
             dewdropType: availableSeats >= 2 ? 'Shared Dewdrop' : 'Solo Dewdrop',
-            carModel: 'Maruti Swift',
-            distance: 8,
+            carModel: (r as any).vehicle?.model || 'Vehicle',
+            distance: (() => {
+              const drop = r.dropoffLocation?.coordinates?.coordinates;
+              const pick = r.pickupLocation?.coordinates?.coordinates;
+              if (drop && typeof drop[1] === 'number' && typeof drop[0] === 'number') {
+                if (typeof enclaveLat === 'number' && typeof enclaveLng === 'number') {
+                  return distanceKm(enclaveLat, enclaveLng, drop[1], drop[0]);
+                } else if (pick && typeof pick[1] === 'number' && typeof pick[0] === 'number') {
+                  return distanceKm(pick[1], pick[0], drop[1], drop[0]);
+                }
+              }
+              return 0;
+            })(),
             status: mappedStatus,
-          } as Dewdrop;
+          } as DewdropDisplay;
         });
 
         setDewdrops(mapped);

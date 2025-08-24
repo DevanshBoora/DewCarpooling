@@ -10,7 +10,7 @@ export const listRides = async (req: Request, res: Response) => {
 
   try {
     const rides = await Ride.find({ community })
-      .populate('owner', 'name avatar')
+      .populate('owner', 'name avatar rating')
       .populate('pickupLocation')
       .populate('dropoffLocation');
     res.json(rides);

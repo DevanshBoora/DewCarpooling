@@ -12,7 +12,9 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { mockMessages, mockChatMessages, Message, ChatMessage } from '../data/mockData';
+// Define local types for messages
+type Message = { id: string; name: string; avatar: string; lastMessage: string; timestamp: string; unreadCount: number };
+type ChatMessage = { id: string; message: string; timestamp: string; isOwn: boolean };
 
 const MessagesScreen: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<Message | null>(null);
@@ -72,13 +74,11 @@ const MessagesScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.screenTitle}>Messages</Text>
-      <FlatList
-        data={mockMessages}
-        renderItem={renderMessageItem}
-        keyExtractor={(item) => item.id}
-        style={styles.messagesList}
-        showsVerticalScrollIndicator={false}
-      />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Ionicons name="chatbubble-ellipses-outline" size={48} color="#666" />
+        <Text style={{ color: '#999', marginTop: 12 }}>Messaging coming soon</Text>
+        <Text style={{ color: '#666', marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>Real-time messaging will be available in a future update</Text>
+      </View>
 
       <Modal
         visible={chatVisible}
@@ -99,13 +99,9 @@ const MessagesScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
 
-          <FlatList
-            data={mockChatMessages}
-            renderItem={renderChatMessage}
-            keyExtractor={(item) => item.id}
-            style={styles.chatMessages}
-            showsVerticalScrollIndicator={false}
-          />
+          <View style={[styles.chatMessages, { alignItems: 'center', justifyContent: 'center' }]}>
+            <Text style={{ color: '#999' }}>No messages yet</Text>
+          </View>
 
           <View style={styles.messageInputContainer}>
             <TextInput

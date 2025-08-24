@@ -10,7 +10,8 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { userProfile, communities } from '../data/mockData';
+import { getMe } from '../api/userService';
+import { api } from '../api/client';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -41,13 +42,13 @@ const AccountScreen: React.FC = () => {
   );
 
   const display = {
-    name: authedUser?.name || userProfile.name,
-    avatar: authedUser?.avatar || userProfile.avatar,
-    ecoImpact: (authedUser as any)?.ecoImpact ?? userProfile.ecoImpact,
-    ridesGiven: (authedUser as any)?.ridesGiven ?? userProfile.ridesGiven,
-    ridesTaken: (authedUser as any)?.ridesTaken ?? userProfile.ridesTaken,
-    co2Saved: (authedUser as any)?.co2Saved ?? userProfile.co2Saved,
-    memberSince: (authedUser as any)?.memberSince || userProfile.memberSince,
+    name: authedUser?.name || 'User',
+    avatar: authedUser?.avatar || '',
+    ecoImpact: (authedUser as any)?.ecoImpact ?? 75,
+    ridesGiven: (authedUser as any)?.ridesGiven ?? 0,
+    ridesTaken: (authedUser as any)?.ridesTaken ?? 0,
+    co2Saved: (authedUser as any)?.co2Saved ?? 0,
+    memberSince: (authedUser as any)?.memberSince || new Date().toISOString(),
   };
   const avatarUri = React.useMemo(() => {
     const a = display.avatar as string;
@@ -60,7 +61,37 @@ const AccountScreen: React.FC = () => {
   const diffTime = Math.abs(today.getTime() - memberSinceDate.getTime());
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   const memberSinceText = `${diffDays} days`;
-    const communityName = communities[userProfile.communityId as keyof typeof communities]?.name || 'No Community';
+  const [communityName, setCommunityName] = React.useState('Loading...');
+  
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const me = await getMe();
+        // community could be populated or an id
+        const comm: any = me?.community;
+        if (comm && typeof comm === 'object' && comm.name) {
+          setCommunityName(comm.name);
+          return;
+        }
+        // Fallback: fetch communities and select matching id or only available one
+        const communities = await api.get<Array<{ _id: string; name?: string }>>('/api/communities');
+        if (Array.isArray(communities) && communities.length) {
+          if (typeof comm === 'string') {
+            const found = communities.find(c => c._id === comm);
+            if (found?.name) { setCommunityName(found.name); return; }
+          }
+          // If only one, use it
+          if (communities.length === 1 && communities[0]?.name) {
+            setCommunityName(communities[0].name!);
+            return;
+          }
+        }
+        setCommunityName('No Community');
+      } catch {
+        setCommunityName('No Community');
+      }
+    })();
+  }, []);
   const handleEditProfile = () => stackNav.navigate('EditProfile');
   const handleLogout = () =>
     Alert.alert('Logout', 'Are you sure you want to logout?', [
@@ -122,7 +153,7 @@ const AccountScreen: React.FC = () => {
             <Text style={styles.profileCommunity}>{communityName}</Text>
             <View style={styles.ratingContainer}>
               <Ionicons name="star" size={16} color="#FFC700" />
-              <Text style={styles.ratingText}>{(authedUser as any)?.rating ?? userProfile.rating}</Text>
+              <Text style={styles.ratingText}>{(authedUser as any)?.rating ?? 4.8}</Text>
               <View style={styles.titleBadge}>
                 <Text style={styles.titleBadgeText}>Green Champion</Text>
               </View>

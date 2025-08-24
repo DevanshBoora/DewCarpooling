@@ -49,3 +49,8 @@ export const getRide = async (rideId: string): Promise<Ride> => {
 export const joinRide = async (rideId: string, userId: string): Promise<Ride> => {
   return api.post(`/api/rides/${encodeURIComponent(rideId)}/join`, { userId });
 };
+
+export const leaveRide = async (rideId: string, userId: string): Promise<Ride> => {
+  // Backend exposes PUT /api/rides/:id (updateRide). We use a MongoDB $pull to remove the participant.
+  return api.put(`/api/rides/${encodeURIComponent(rideId)}`, { $pull: { participants: userId } });
+};

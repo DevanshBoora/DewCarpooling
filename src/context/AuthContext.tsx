@@ -2,7 +2,7 @@ import React, { createContext, useState, useEffect, useContext, ReactNode, useCa
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, setAuthToken, clearAuthToken, onUnauthorized } from '../api/client';
-import { clearCachedUserId } from '../api/userService';
+import { clearCachedUserId, getMe } from '../api/userService';
 
 interface User {
   _id: string;
@@ -67,7 +67,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           // If no cached user, try to fetch current profile
           if (!user) {
             try {
-              const me = await api.get<User>('/api/users/me');
+              clearCachedUserId();
+              const me = await getMe();
               user = me;
               await AsyncStorage.setItem('user', JSON.stringify(me));
             } catch {}
@@ -94,7 +95,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await AsyncStorage.setItem('user', JSON.stringify(user));
     // Try to refresh profile from backend
     try {
-      const me = await api.get<User>('/api/users/me');
+      clearCachedUserId();
+      const me = await getMe();
       await AsyncStorage.setItem('user', JSON.stringify(me));
       const needsProfile = !!(payload.isNew || !me?.isProfileComplete);
       setAuthState({ user: me, token, isAuthenticated: true, isLoading: false, needsProfile });
@@ -106,7 +108,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const refreshMe = useCallback(async () => {
     try {
-      const me = await api.get<User>('/api/users/me');
+      clearCachedUserId();
+      const me = await getMe();
       await AsyncStorage.setItem('user', JSON.stringify(me));
       const needsProfile = !!(!me?.isProfileComplete);
       setAuthState(prev => ({ ...prev, user: me, needsProfile }));

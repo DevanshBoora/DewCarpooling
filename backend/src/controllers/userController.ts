@@ -40,7 +40,7 @@ export const updateUserProfile = async (req: AuthedRequest, res: Response) => {
     if (String(req.userId) !== String(req.params.id)) {
       return res.status(403).json({ message: 'Forbidden' });
     }
-    const { name, email, avatar, community } = req.body as { name?: string; email?: string; avatar?: string; community?: string };
+    const { name, email, avatar, community, rating } = req.body as { name?: string; email?: string; avatar?: string; community?: string; rating?: number };
     console.log('[updateUserProfile] incoming body:', {
       name: typeof name === 'string' ? name : typeof name,
       avatarLen: typeof avatar === 'string' ? avatar.length : undefined,
@@ -55,6 +55,14 @@ export const updateUserProfile = async (req: AuthedRequest, res: Response) => {
     if (typeof avatar === 'string' && avatar.trim()) update.avatar = avatar.trim();
     // Allow switching/setting community explicitly via this endpoint
     if (typeof community === 'string' && community.trim()) update.community = community.trim();
+    // Allow rating update when provided and valid (0..5)
+    if (typeof rating === 'number') {
+      if (Number.isFinite(rating) && rating >= 0 && rating <= 5) {
+        update.rating = rating;
+      } else {
+        return res.status(400).json({ message: 'Invalid rating. Must be a number between 0 and 5.' });
+      }
+    }
 
     // Perform update first
     console.log('[updateUserProfile] update payload:', Object.keys(update));

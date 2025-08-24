@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -25,6 +25,7 @@ interface DewdropCardProps {
   dewdrop: Dewdrop;
   onPress: (dewdropId: string) => void;
   isHorizontal?: boolean;
+  hideDestination?: boolean;
 }
 
 const formatDate = (dateString: string): string => {
@@ -32,17 +33,24 @@ const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString('en-US', options);
 };
 
-const DewdropCard: React.FC<DewdropCardProps> = ({ dewdrop, onPress, isHorizontal = false }) => {
+const DewdropCard: React.FC<DewdropCardProps> = ({ dewdrop, onPress, isHorizontal = false, hideDestination = false }) => {
+  // Robust avatar fallback
+  const fallbackAvatar = useMemo(
+    () => `https://ui-avatars.com/api/?background=3c7d68&color=fff&name=${encodeURIComponent(dewdrop.driverName || 'Driver')}`,
+    [dewdrop.driverName]
+  );
+  const [avatarUrl, setAvatarUrl] = useState(dewdrop.driverAvatar || fallbackAvatar);
+
   return (
-    <View style={[styles.container, isHorizontal && styles.horizontalContainer, {marginHorizontal: isHorizontal ? 0 : 16} ]}>
+    <View style={[styles.container, isHorizontal && styles.horizontalContainer]}>
       <View style={styles.cardHeader}>
         <View style={styles.driverInfo}>
-          <Image source={{ uri: dewdrop.driverAvatar }} style={styles.avatar} />
+          <Image source={{ uri: avatarUrl }} onError={() => setAvatarUrl(fallbackAvatar)} style={styles.avatar} />
           <View>
             <Text style={styles.driverName} numberOfLines={1}>{dewdrop.driverName}</Text>
             <View style={styles.ratingContainer}>
               <Ionicons name="star" size={16} color="#FFC700" />
-              <Text style={styles.rating}>{dewdrop.rating.toFixed(1)}</Text>
+              <Text style={styles.rating}>{Number.isFinite(dewdrop.rating) ? dewdrop.rating.toFixed(1) : '4.8'}</Text>
             </View>
           </View>
         </View>
@@ -54,12 +62,14 @@ const DewdropCard: React.FC<DewdropCardProps> = ({ dewdrop, onPress, isHorizonta
         </View>
       </View>
 
-      <View style={styles.routeInfo}>
-        <View style={styles.routePoint}>
-          <Ionicons name="location-outline" size={20} color="#FF6B6B" />
-          <Text style={styles.locationText} numberOfLines={1}>{dewdrop.to}</Text>
+      {!hideDestination && (
+        <View style={styles.routeInfo}>
+          <View style={styles.routePoint}>
+            <Ionicons name="location-outline" size={20} color="#FF6B6B" />
+            <Text style={styles.locationText} numberOfLines={1}>{dewdrop.to}</Text>
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={styles.rideDetails}>
         <View style={styles.detailItem}>
@@ -82,7 +92,7 @@ const DewdropCard: React.FC<DewdropCardProps> = ({ dewdrop, onPress, isHorizonta
         </View>
       </View>
 
-      <TouchableOpacity style={styles.requestButton} onPress={() => onPress(dewdrop.id)} accessibilityRole="button" accessibilityLabel={`View details for dewdrop from ${dewdrop.from} to ${dewdrop.to}`}>
+      <TouchableOpacity style={styles.requestButton} onPress={() => onPress(dewdrop.id)} accessibilityRole="button" accessibilityLabel={`View details for dewdrop to ${dewdrop.to}`}>
         <Text style={styles.requestButtonText}>Request Seat</Text>
       </TouchableOpacity>
     </View>
@@ -94,17 +104,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 12,
   },
   container: {
     backgroundColor: '#1C1C1E',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     marginBottom: 12,
   },
   horizontalContainer: {
-    width: 280,
-    marginRight: 12,
+    width: 300,
+    marginRight: 14,
     marginBottom: 0,
   },
   card: {
@@ -170,11 +180,15 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   routeInfo: {
-    marginVertical: 16,
+    marginTop: 12,
+    marginBottom: 10,
   },
   routePoint: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  routeSpacer: {
+    height: 6,
   },
   locationText: {
     color: '#FFFFFF',

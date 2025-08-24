@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AuthStackParamList } from '../types/navigation';
+import { api } from '../api/client';
+import { getMe, updateUserProfile } from '../api/userService';
 
 type Props = StackScreenProps<AuthStackParamList, 'Register'>;
 
@@ -11,8 +13,26 @@ const RegisterScreen: React.FC<Props> = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [communities, setCommunities] = useState<Array<{ _id: string; name?: string }>>([]);
+  const [communityId, setCommunityId] = useState<string | null>(null);
   const [errors, setErrors] = useState<{ name?: string; email?: string; password?: string }>(() => ({}));
-  const { register } = useAuth();
+  const { register, refreshMe } = useAuth();
+  const [showCommunityPicker, setShowCommunityPicker] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await api.get<Array<{ _id: string; name?: string }>>('/api/communities');
+        setCommunities(list || []);
+        // Prefer Gauthami Enclave if available; otherwise first
+        const preferred = (list || []).find(c => (c.name || '').toLowerCase().includes('gauthami enclave')) || (list || [])[0];
+        if (preferred?._id) setCommunityId(preferred._id);
+      } catch {
+        setCommunities([]);
+        setCommunityId(null);
+      }
+    })();
+  }, []);
 
   const handleRegister = async () => {
     const localErrors: { name?: string; email?: string; password?: string } = {};
@@ -30,6 +50,14 @@ const RegisterScreen: React.FC<Props> = ({ navigation }) => {
       setLoading(true);
       setErrors({});
       await register(name, email, password);
+      // After successful auth, set the user's community if selected
+      try {
+        const me = await getMe(0);
+        if (me?._id && communityId) {
+          await updateUserProfile(me._id, { community: communityId } as any);
+          await refreshMe();
+        }
+      } catch {}
     } catch (error: any) {
       if (error?.status === 422 && error?.data?.errors) {
         setErrors(error.data.errors);
@@ -86,6 +114,34 @@ const RegisterScreen: React.FC<Props> = ({ navigation }) => {
         editable={!loading}
       />
       {!!errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
+      {/* Community selection */}
+      <View style={[styles.input, { paddingVertical: 12 }]}> 
+        <Text style={{ color: '#aaa', marginBottom: 6 }}>Community</Text>
+        <TouchableOpacity
+          onPress={() => setShowCommunityPicker(v => !v)}
+          disabled={loading}
+        >
+          <Text style={{ color: '#fff', fontSize: 16 }}>
+            {communities.find(c => c._id === communityId)?.name || 'Gauthami Enclave'}
+          </Text>
+        </TouchableOpacity>
+        {showCommunityPicker && communities.length > 1 && (
+          <View style={{ marginTop: 10, gap: 8 }}>
+            {communities.map(c => (
+              <TouchableOpacity
+                key={c._id}
+                style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#444' }}
+                onPress={() => { setCommunityId(c._id); setShowCommunityPicker(false); }}
+                disabled={loading}
+              >
+                <Text style={{ color: c._id === communityId ? '#4CE5B1' : '#fff', fontSize: 15 }}>
+                  {c.name || 'Community'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
       <TouchableOpacity style={[styles.button, loading && { opacity: 0.7 }]} onPress={handleRegister} disabled={loading}>
         <Text style={styles.buttonText}>{loading ? 'Signing up...' : 'Sign Up'}</Text>
       </TouchableOpacity>

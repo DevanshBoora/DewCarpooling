@@ -1,22 +1,6 @@
 import { api } from './client';
-import { userProfile } from '../data/mockData';
 
-let cachedUserId: string | null = null;
-
-export async function getCurrentUserId(): Promise<string> {
-  if (cachedUserId) return cachedUserId; // narrowed to string here
-  const users = await api.get<any[]>(`/api/users?name=${encodeURIComponent(userProfile.name)}`);
-  const currentUser = users.find(u => String(u.name).toLowerCase() === userProfile.name.toLowerCase()) || users[0];
-  if (!currentUser?._id) {
-    throw new Error('Could not resolve current user in the database');
-  }
-  cachedUserId = currentUser._id as string;
-  return currentUser._id as string;
-}
-
-export function clearCachedUserId() {
-  cachedUserId = null;
-}
+// Remove mock data dependency - use real authentication
 
 export interface UpdateUserPayload {
   name?: string;
@@ -40,8 +24,31 @@ export type MeResponse = {
   isProfileComplete?: boolean;
 };
 
-export async function getMe(): Promise<MeResponse> {
-  return api.get('/api/users/me');
+// Lightweight in-memory cache for /api/users/me
+let cachedMe: MeResponse | null = null;
+let cachedAt = 0;
+let inflight: Promise<MeResponse> | null = null;
+
+export function clearCachedUserId() {
+  cachedMe = null;
+  cachedAt = 0;
+  inflight = null;
+}
+
+export async function getMe(ttlMs: number = 30000): Promise<MeResponse> {
+  const now = Date.now();
+  if (cachedMe && now - cachedAt < ttlMs) return cachedMe;
+  if (inflight) return inflight;
+  inflight = api.get<MeResponse>('/api/users/me')
+    .then((res) => {
+      cachedMe = res;
+      cachedAt = Date.now();
+      return res;
+    })
+    .finally(() => {
+      inflight = null;
+    });
+  return inflight;
 }
 
 export async function getMyContext(): Promise<{ userId: string; communityId?: string }> {

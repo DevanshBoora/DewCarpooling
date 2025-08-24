@@ -1,12 +1,15 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, Theme } from '@react-navigation/native';
+import { createStackNavigator, CardStyleInterpolators, TransitionPresets } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createStackNavigator } from '@react-navigation/stack';
-import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StyleSheet, ActivityIndicator, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { ToastProvider } from './src/context/ToastContext';
 import { RootStackParamList, AuthStackParamList } from './src/types/navigation';
+import FadeOnFocus from './src/components/FadeOnFocus';
 
 import {
   HomeScreen,
@@ -42,7 +45,14 @@ const defaultStackOptions = {
 };
 
 const HomeStack = () => (
-  <Stack.Navigator screenOptions={{ headerShown: false }}>
+  <Stack.Navigator
+    screenOptions={{
+      headerShown: false,
+      gestureEnabled: true,
+      ...TransitionPresets.SlideFromRightIOS,
+      cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+    }}
+  >
     <Stack.Screen name="HomeScreen" component={HomeScreen} />
     <Stack.Screen name="PlanRide" component={PlanRideScreen} />
     <Stack.Screen name="AvailableRides" component={AvailableRidesScreen} />
@@ -52,25 +62,53 @@ const HomeStack = () => (
 );
 
 const CreateRideStack = () => (
-  <Stack.Navigator screenOptions={defaultStackOptions}>
+  <Stack.Navigator
+    screenOptions={{
+      ...defaultStackOptions,
+      gestureEnabled: true,
+      ...TransitionPresets.SlideFromRightIOS,
+      cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+    }}
+  >
     <Stack.Screen name="CreateRide" component={CreateRideScreen} options={{ title: '' }} />
   </Stack.Navigator>
 );
 
 const ActivityStack = () => (
-  <Stack.Navigator screenOptions={defaultStackOptions}>
+  <Stack.Navigator
+    screenOptions={{
+      ...defaultStackOptions,
+      gestureEnabled: true,
+      ...TransitionPresets.SlideFromRightIOS,
+      cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+    }}
+  >
     <Stack.Screen name="ActivityList" component={ActivityScreen} options={{ title: '' }} />
   </Stack.Navigator>
 );
 
 const MessagesStack = () => (
-  <Stack.Navigator screenOptions={defaultStackOptions}>
+  <Stack.Navigator
+    screenOptions={{
+      ...defaultStackOptions,
+      gestureEnabled: true,
+      ...TransitionPresets.SlideFromRightIOS,
+      cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+    }}
+  >
     <Stack.Screen name="MessageList" component={MessagesScreen} options={{ title: '' }} />
   </Stack.Navigator>
 );
 
 const AccountStack = () => (
-  <Stack.Navigator screenOptions={defaultStackOptions}>
+  <Stack.Navigator
+    screenOptions={{
+      ...defaultStackOptions,
+      gestureEnabled: true,
+      ...TransitionPresets.SlideFromRightIOS,
+      cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+    }}
+  >
     <Stack.Screen name="AccountDetails" component={AccountScreen} options={{ title: '' }} />
     <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
     <Stack.Screen name="Help" component={HelpScreen} options={{ title: 'Help & Support' }} />
@@ -97,11 +135,31 @@ const AppTabs = () => (
       headerShown: false,
     })}
   >
-    <Tab.Screen name="Home" component={HomeStack} />
-    <Tab.Screen name="Activity" component={ActivityStack} />
-    <Tab.Screen name="Create Ride" component={CreateRideStack} />
-    <Tab.Screen name="Messages" component={MessagesStack} />
-    <Tab.Screen name="Account" component={AccountStack} />
+    <Tab.Screen name="Home" children={() => (
+      <FadeOnFocus>
+        <HomeStack />
+      </FadeOnFocus>
+    )} />
+    <Tab.Screen name="Activity" children={() => (
+      <FadeOnFocus>
+        <ActivityStack />
+      </FadeOnFocus>
+    )} />
+    <Tab.Screen name="Create Ride" children={() => (
+      <FadeOnFocus>
+        <CreateRideStack />
+      </FadeOnFocus>
+    )} />
+    <Tab.Screen name="Messages" children={() => (
+      <FadeOnFocus>
+        <MessagesStack />
+      </FadeOnFocus>
+    )} />
+    <Tab.Screen name="Account" children={() => (
+      <FadeOnFocus>
+        <AccountStack />
+      </FadeOnFocus>
+    )} />
   </Tab.Navigator>
 );
 
@@ -136,13 +194,25 @@ const RootNavigator = () => {
 };
 
 export default function App() {
+  const MyTheme = {
+    ...DefaultTheme,
+    colors: {
+      ...DefaultTheme.colors,
+      background: '#000000',
+    },
+  };
+
   return (
-    <AuthProvider>
-      <NavigationContainer>
-        <StatusBar style="light" backgroundColor="#000000" />
-        <RootNavigator />
-      </NavigationContainer>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <ToastProvider>
+          <NavigationContainer theme={MyTheme}>
+            <StatusBar style="light" backgroundColor="#000000" />
+            <RootNavigator />
+          </NavigationContainer>
+        </ToastProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 

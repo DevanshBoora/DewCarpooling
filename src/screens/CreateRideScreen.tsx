@@ -16,6 +16,9 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getMe, getMyContext } from '../api/userService';
 import { createRide } from '../api/rideService';
+import * as Location from 'expo-location';
+import type { PlacePrediction } from '../api/googleMaps';
+import { searchPlacesNominatim, haversineDistanceKm } from '../api/openMaps';
 
 type RootStackParamList = {
   CreateRide: undefined;
@@ -30,6 +33,13 @@ interface CreateRideScreenProps {
 
 const CreateRideScreen: React.FC<CreateRideScreenProps> = ({ navigation }) => {
   const [destination, setDestination] = useState('');
+  const [destAddress, setDestAddress] = useState('');
+  const [suggestions, setSuggestions] = useState<PlacePrediction[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [osmIndex, setOsmIndex] = useState<Record<string, { lat: number; lng: number; name: string; address: string }>>({});
+  const [distanceText, setDistanceText] = useState<string>('');
+  const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [date, setDate] = useState(new Date());
   const [time, setTime] = useState(new Date());
   const [seats, setSeats] = useState('');
@@ -48,6 +58,75 @@ const CreateRideScreen: React.FC<CreateRideScreenProps> = ({ navigation }) => {
     if (event.type === 'set') {
       setTime(currentTime);
     }
+  };
+
+  // Ask for location permission and get current location as pickup
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const pos = await Location.getCurrentPositionAsync({});
+        setOriginCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      } catch {}
+    })();
+  }, []);
+
+  // Autocomplete when typing destination (OSM primary)
+  React.useEffect(() => {
+    let active = true;
+    const run = async () => {
+      const q = destination.trim();
+      if (q.length < 2) { setSuggestions([]); return; }
+      setSearching(true);
+      try {
+        // OSM primary
+        const osm = await searchPlacesNominatim(q, 6, ['in']);
+        if (active) {
+          const idx: Record<string, { lat: number; lng: number; name: string; address: string }> = {};
+          const mapped: PlacePrediction[] = osm.map((p) => {
+            const pid = `osm:${p.id}`;
+            idx[pid] = { lat: p.lat, lng: p.lon, name: p.name, address: p.displayName };
+            return {
+              place_id: pid,
+              description: p.displayName,
+              structured_formatting: {
+                main_text: p.name,
+                secondary_text: p.displayName.replace(p.name, '').replace(/^,\s*/, ''),
+              },
+            } as PlacePrediction;
+          });
+          setOsmIndex(idx);
+          setSuggestions(mapped);
+        }
+      } catch {
+        if (active) setSuggestions([]);
+      } finally {
+        if (active) setSearching(false);
+      }
+    };
+    const t = setTimeout(run, 250);
+    return () => { active = false; clearTimeout(t); };
+  }, [destination]);
+
+  const onSelectPrediction = async (p: PlacePrediction) => {
+    try {
+      if (p.place_id.startsWith('osm:')) {
+        // OSM path
+        const info = osmIndex[p.place_id];
+        if (!info) return;
+        setDestination(info.name);
+        setDestAddress(info.address);
+        setDestCoords({ lat: info.lat, lng: info.lng });
+        setSuggestions([]);
+        if (originCoords) {
+          const km = haversineDistanceKm({ lat: originCoords.lat, lon: originCoords.lng }, { lat: info.lat, lon: info.lng });
+          setDistanceText(km ? `Approx ${km.toFixed(1)} km` : '');
+        }
+        return;
+      }
+      // Ignore any non-OSM predictions
+    } catch {}
   };
 
 
@@ -77,16 +156,29 @@ const CreateRideScreen: React.FC<CreateRideScreenProps> = ({ navigation }) => {
       const departure = new Date(date);
       departure.setHours(time.getHours(), time.getMinutes(), 0, 0);
 
-      // Minimal location objects (replace with real geocoded coordinates later)
+      // Build location objects using real coordinates if available
+      const pickupCoords: [number, number] = originCoords
+        ? [originCoords.lng, originCoords.lat]
+        : [0, 0];
+      const dropoffCoords: [number, number] = destCoords
+        ? [destCoords.lng, destCoords.lat]
+        : [0, 0];
+
       const pickupLocation = {
-        name: 'Pickup',
-        address: 'Pickup',
-        coordinates: { type: 'Point' as const, coordinates: [0, 0] as [number, number] },
+        name: 'Current location',
+        address: 'Current location',
+        coordinates: {
+          type: 'Point' as const,
+          coordinates: pickupCoords,
+        },
       };
       const dropoffLocation = {
         name: destination,
-        address: destination,
-        coordinates: { type: 'Point' as const, coordinates: [0, 0] as [number, number] },
+        address: destAddress || destination,
+        coordinates: {
+          type: 'Point' as const,
+          coordinates: dropoffCoords,
+        },
       };
 
       await createRide({
@@ -114,7 +206,7 @@ const CreateRideScreen: React.FC<CreateRideScreenProps> = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
+      <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#ffffff" />
@@ -132,9 +224,29 @@ const CreateRideScreen: React.FC<CreateRideScreenProps> = ({ navigation }) => {
                 placeholder="Where are you going?"
                 placeholderTextColor="#8E8E93"
                 value={destination}
-                onChangeText={setDestination}
+                onChangeText={(t) => {
+                  setDestination(t);
+                  setDestAddress('');
+                  setDestCoords(null);
+                  setDistanceText('');
+                }}
               />
             </View>
+            {!!suggestions.length && (
+              <View style={styles.suggestionsBox}>
+                {suggestions.slice(0, 6).map((p) => (
+                  <TouchableOpacity key={p.place_id} style={styles.suggestionItem} onPress={() => onSelectPrediction(p)}>
+                    <Text style={styles.suggestionTitle}>{p.structured_formatting?.main_text || p.description}</Text>
+                    {!!p.structured_formatting?.secondary_text && (
+                      <Text style={styles.suggestionSubtitle}>{p.structured_formatting?.secondary_text}</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            {!!distanceText && (
+              <Text style={styles.distanceText}>Distance: {distanceText}</Text>
+            )}
           </View>
 
           <View style={styles.row}>
@@ -266,6 +378,37 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     height: 56,
+  },
+  suggestionsBox: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  suggestionItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#2A2A2E',
+  },
+  suggestionTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+  },
+  suggestionSubtitle: {
+    color: '#8E8E93',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  distanceText: {
+    color: '#8E8E93',
+    fontSize: 13,
+    marginTop: 8,
+  },
+  attribution: {
+    color: '#8E8E93',
+    fontSize: 11,
+    marginTop: 6,
   },
   inputText: {
     flex: 1,

@@ -1,13 +1,16 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Image } from 'react-native';
+import React, { useMemo, useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import { getMyContext } from '../api/userService';
+import { listRides, Ride } from '../api/rideService';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
 
 type RootStackParamList = {
   TripOptions: { destination: { name: string; address: string } };
-  AvailableRides: { destination: { name: string; address: string } };
+  AvailableRides: { destination?: { name: string; address: string }; rideId?: string };
 };
 
 type TripOptionsScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TripOptions'>;
@@ -20,34 +23,74 @@ interface TripOptionsScreenProps {
 
 const TripOptionsScreen: React.FC<TripOptionsScreenProps> = ({ navigation, route }) => {
   const { destination } = route.params;
+  const insets = useSafeAreaInsets();
 
-  const origin = { latitude: 17.3999, longitude: 78.35, name: 'Home' }; // Approx. Gauthami Enclave
-  const destCoords = { latitude: 17.4202, longitude: 78.3402 }; // Approx. CBIT
+  // Approximate origin and destination coordinates
+  const origin = useMemo(() => ({ latitude: 17.3999, longitude: 78.35, name: 'Home' }), []);
+  const destCoords = useMemo(() => ({ latitude: 17.4202, longitude: 78.3402 }), []);
+
+  // Memoized region to prevent MapView re-renders
+  const initialRegion = useMemo(() => ({
+    latitude: (origin.latitude + destCoords.latitude) / 2,
+    longitude: (origin.longitude + destCoords.longitude) / 2,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05,
+  }), [origin, destCoords]);
+
+  // Suggestions from active rides in user's community
+  const [suggestedDrops, setSuggestedDrops] = useState<Array<{ name: string; rideId: string }>>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { communityId } = await getMyContext();
+        if (!communityId) { setSuggestedDrops([]); return; }
+        const rides = await listRides(communityId);
+        const active = (rides || []).filter(r => r.status === 'active');
+        // One pill per unique destination name (case-insensitive, trimmed)
+        const seen = new Set<string>();
+        const norm = (s: string) => (s || '').trim().toLowerCase();
+        const picks: Array<{ name: string; rideId: string }> = [];
+        for (const r of active) {
+          const name = r?.dropoffLocation?.name;
+          if (!name) continue;
+          const k = norm(name);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          picks.push({ name, rideId: r._id });
+          if (picks.length >= 8) break;
+        }
+        setSuggestedDrops(picks);
+      } catch {
+        setSuggestedDrops([]);
+      }
+    })();
+  }, []);
+
+  const onSelectSuggestion = useCallback((rideId: string) => {
+    navigation.navigate('AvailableRides', { rideId });
+  }, [navigation]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
       <MapView
         style={styles.map}
         provider="google"
-        initialRegion={{
-          latitude: (origin.latitude + destCoords.latitude) / 2,
-          longitude: (origin.longitude + destCoords.longitude) / 2,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        }}>
+        initialRegion={initialRegion}
+        liteMode
+      >
         <Marker coordinate={origin} title="Home" pinColor="#00FF00" />
         <Marker coordinate={destCoords} title={destination.name} />
         <Polyline coordinates={[origin, destCoords]} strokeColor="#FFFFFF" strokeWidth={4} />
       </MapView>
 
-      <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+      <TouchableOpacity style={[styles.backButton, { top: Math.max(insets.top + 12, 20) }]} onPress={() => navigation.goBack()}>
         <Ionicons name="arrow-back" size={24} color="#000000" />
       </TouchableOpacity>
 
-      <View style={styles.bottomSheet}>
+      <View style={[styles.bottomSheet, { paddingBottom: 24 + insets.bottom }]}>
         <Text style={styles.sheetTitle}>Choose a trip</Text>
-        
-        <TouchableOpacity style={styles.tripOption}>
+
+        <TouchableOpacity style={styles.tripOption} activeOpacity={0.8}>
           <Image source={{ uri: 'https://img.icons8.com/ios-filled/50/ffffff/car.png' }} style={styles.carIcon} />
           <View style={styles.tripDetails}>
             <Text style={styles.tripName}>Dewdrop</Text>
@@ -65,6 +108,18 @@ const TripOptionsScreen: React.FC<TripOptionsScreenProps> = ({ navigation, route
         <TouchableOpacity style={styles.confirmButton} onPress={() => navigation.navigate('AvailableRides', { destination })}>
           <Text style={styles.confirmButtonText}>Select Dewdrop</Text>
         </TouchableOpacity>
+
+        <View style={styles.suggestSection}>
+          <Text style={styles.suggestTitle}>Rides heading to…</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestList}>
+            {suggestedDrops.map((s) => (
+              <TouchableOpacity key={s.rideId} style={styles.suggestPill} onPress={() => onSelectSuggestion(s.rideId)}>
+                <Ionicons name="location" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Text style={styles.suggestText} numberOfLines={1} ellipsizeMode="tail">{s.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -86,12 +141,19 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 20,
     elevation: 5,
+    zIndex: 20,
   },
   bottomSheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: '#1C1C1E',
     padding: 16,
+    paddingTop: 20,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
+    zIndex: 10,
   },
   sheetTitle: {
     color: '#FFFFFF',
@@ -159,6 +221,34 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  suggestSection: {
+    marginTop: 16,
+  },
+  suggestTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  suggestList: {
+    paddingVertical: 4,
+  },
+  suggestPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#333333',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  suggestText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 16,
+    maxWidth: 180,
+    flexShrink: 1,
   },
 });
 

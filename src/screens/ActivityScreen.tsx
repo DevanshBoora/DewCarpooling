@@ -10,64 +10,135 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { Dewdrop } from '../data/mockData';
+import { BASE_URL } from '../config';
 import { getMe, getMyContext } from '../api/userService';
-import { listRides, Ride } from '../api/rideService';
+import { listRides, leaveRide, Ride } from '../api/rideService';
+import { useToast } from '../context/ToastContext';
+
+// Match DewdropCard date format, e.g., "Aug 24"
+const formatDate = (dateString: string): string => {
+  const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  return new Date(dateString).toLocaleDateString('en-US', options);
+};
 
 const ActivityScreen: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
   const [upcomingDewdrops, setUpcomingDewdrops] = useState<Dewdrop[]>([]);
   const [pastDewdrops, setPastDewdrops] = useState<Dewdrop[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const { show } = useToast();
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { communityId } = await getMyContext();
-        if (!communityId) return;
-        const rides = await listRides(communityId);
-        const now = Date.now();
-        const mapped: Dewdrop[] = rides.map((r: Ride) => ({
-          id: r._id,
-          driverName: r.owner?.name || 'Driver',
-          driverAvatar: r.owner?.avatar || 'https://i.pravatar.cc/100?img=12',
-          from: r.pickupLocation?.name || 'Pickup',
-          to: r.dropoffLocation?.name || 'Destination',
-          pricePerKm: r.price || 0,
-          availableSeats: Math.max(0, (r.capacity || 0) - (r.participants?.length || 0)),
-          date: r.departureTime,
-          time: new Date(r.departureTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          duration: '—',
-          rating: 4.8,
-          dewdropType: 'Shared Dewdrop',
-          carModel: '—',
-          distance: 0,
-          status: r.status === 'completed' || new Date(r.departureTime).getTime() < now ? 'completed' : 'upcoming',
-        }));
-        setUpcomingDewdrops(mapped.filter(d => d.status === 'upcoming'));
-        setPastDewdrops(mapped.filter(d => d.status === 'completed'));
-      } catch (e) {
-        console.log('Failed to load activity rides', e);
+  const loadData = React.useCallback(async () => {
+    try {
+      const { communityId, userId } = await getMyContext();
+      if (!communityId || !userId) {
+        setUpcomingDewdrops([]);
+        setPastDewdrops([]);
+        show('Missing community context', { type: 'error' });
+      } else {
+      setCurrentUserId(userId);
+      const rides = await listRides(communityId);
+
+      // Only include rides the user has requested/joined (participants)
+      const involved = rides.filter((r: Ride) => {
+        const pids = Array.isArray(r.participants)
+          ? (r.participants as any[]).map(p => (typeof p === 'string' ? p : p?._id)).filter(Boolean)
+          : [];
+        const isParticipant = pids.includes(userId);
+        return isParticipant;
+      });
+
+      const mapToDewdrop = (r: Ride): Dewdrop => {
+          const rawAvatar = (r.owner?.avatar as any)?.trim?.() || '';
+          const isObjectId = /^[a-f\d]{24}$/i.test(rawAvatar);
+          const normalizedPath = isObjectId ? `/api/files/${rawAvatar}` : (rawAvatar.startsWith('/') ? rawAvatar : rawAvatar);
+          const absoluteAvatar = rawAvatar
+            ? (rawAvatar.startsWith('http://') || rawAvatar.startsWith('https://') || rawAvatar.startsWith('data:')
+                ? rawAvatar
+                : `${BASE_URL}${normalizedPath.startsWith('/') ? '' : '/'}${normalizedPath}`)
+            : '';
+          return {
+            id: r._id,
+            driverName: r.owner?.name || 'Driver',
+            driverAvatar: absoluteAvatar || `https://ui-avatars.com/api/?background=3c7d68&color=fff&name=${encodeURIComponent(r.owner?.name || 'Driver')}`,
+            from: r.pickupLocation?.name || 'Pickup',
+            to: r.dropoffLocation?.name || 'Destination',
+            pricePerKm: r.price || 0,
+            availableSeats: Math.max(0, (r.capacity || 0) - (r.participants?.length || 0)),
+            date: r.departureTime,
+            time: new Date(r.departureTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            duration: '—',
+            rating: (r.owner as any)?.rating ?? 4.8,
+            dewdropType: 'Shared Dewdrop',
+            carModel: '—',
+            distance: 0,
+            status: r.status === 'completed' ? 'completed' : 'upcoming',
+          };
+      };
+
+      const upcoming = involved.filter(r => r.status === 'active').map(mapToDewdrop);
+      const past = involved.filter(r => r.status === 'completed').map(mapToDewdrop);
+
+      setUpcomingDewdrops(upcoming);
+      setPastDewdrops(past);
       }
-    })();
+    } catch (e: any) {
+      console.log('Failed to load rides', e);
+      const msg = e?.message || 'Failed to load rides';
+      show(msg, { type: 'error' });
+    } finally {
+      // no loading toast to hide
+    }
   }, []);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      loadData();
+      return () => {};
+    }, [loadData])
+  );
+
   const handleCardPress = (d: Dewdrop) => {
-    Alert.alert('Dewdrop', `Details for ride with ${d.driverName}`);
+    show(`Ride with ${d.driverName}`, { type: 'info' });
   };
 
   const handleCancel = (d: Dewdrop) => {
     Alert.alert('Cancel Dewdrop', `Cancel ride with ${d.driverName}?`, [
       { text: 'No', style: 'cancel' },
-      { text: 'Yes', style: 'destructive', onPress: () => Alert.alert('Cancelled', 'Your dewdrop has been cancelled.') },
+      {
+        text: 'Yes',
+        style: 'destructive',
+        onPress: () => {
+          // Optimistic update: remove immediately
+          setUpcomingDewdrops(prev => prev.filter(item => item.id !== d.id));
+          setPastDewdrops(prev => prev.filter(item => item.id !== d.id));
+          show('Seat canceled', { type: 'success' });
+          // Fire API call
+          if (currentUserId) {
+            (async () => {
+              try {
+                await leaveRide(d.id, currentUserId);
+              } catch (e) {
+                console.log('Failed to leave ride', e);
+                // Re-sync from server in case of failure
+                await loadData();
+                show('Could not cancel your seat. List refreshed.', { type: 'error' });
+              }
+            })();
+          }
+        },
+      },
     ]);
   };
 
   const handleMessage = (d: Dewdrop) => {
-    Alert.alert('Message Driver', `Opening chat with ${d.driverName}`);
+    show(`Opening chat with ${d.driverName}`, { type: 'info' });
   };
 
   const handleRate = (d: Dewdrop) => {
-    Alert.alert('Rate Driver', `Rate ${d.driverName}`);
+    show(`Rate ${d.driverName}`, { type: 'info' });
   };
 
   const renderDewdropItem = ({ item: dewdrop }: { item: Dewdrop }) => (
@@ -96,7 +167,7 @@ const ActivityScreen: React.FC = () => {
       <View style={styles.dewdropDetails}>
         <View style={styles.detailItem}>
           <Ionicons name="calendar-outline" size={16} color="#8E8E93" />
-          <Text style={styles.detailText}>{dewdrop.date}</Text>
+          <Text style={styles.detailText}>{formatDate(dewdrop.date)}</Text>
         </View>
         <View style={styles.detailItem}>
           <Ionicons name="time-outline" size={16} color="#8E8E93" />

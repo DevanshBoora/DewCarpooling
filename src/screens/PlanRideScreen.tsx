@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, FlatList } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { api } from '../api/client';
 import { getMyContext } from '../api/userService';
+import { listRides, Ride } from '../api/rideService';
 
 type RootStackParamList = {
   PlanRide: undefined;
-  AvailableRides: { destination: { name: string; address: string } };
+  AvailableRides: { destination?: { name: string; address: string }; rideId?: string };
 };
 
 type PlanRideNavigationProp = StackNavigationProp<RootStackParamList, 'PlanRide'>;
@@ -18,29 +19,64 @@ interface PlanRideScreenProps {
 
 const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ navigation }) => {
   const [destination, setDestination] = useState('');
-  const [places, setPlaces] = useState<Array<{ id: string; name: string; address: string }>>([]);
+  const [places, setPlaces] = useState<Array<{ id: string; name: string; address: string; rideId?: string }>>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [usedFallback, setUsedFallback] = useState<boolean>(false);
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
+      setError(null);
       try {
         const { communityId } = await getMyContext();
-        if (!communityId) return;
-        const res = await api.get<any[]>(`/api/communities/${encodeURIComponent(communityId)}/places`);
-        const mapped = (res || []).map((p: any) => ({ id: p._id, name: p.name, address: p.address }));
-        setPlaces(mapped);
-      } catch (e) {
-        // fail silently; keep list empty
+        if (!communityId) {
+          setPlaces([]);
+          setUsedFallback(false);
+          return;
+        }
+
+        // Build suggestions directly from active rides in this community
+        const rides = await listRides(communityId);
+        const activeRides = (rides || []).filter(r => r.status === 'active');
+        const norm = (s: string) => (s || '').trim().toLowerCase();
+        const seen = new Set<string>();
+        const suggestions: Array<{ id: string; name: string; address: string; rideId?: string }> = [];
+        for (const r of activeRides) {
+          const name = r.dropoffLocation?.name || 'Destination';
+          const addrRaw = r.dropoffLocation?.address || r.dropoffLocation?.name || '';
+          const address = norm(addrRaw) === norm(name) ? '' : addrRaw; // hide grey line if duplicate
+          const key = norm(name);
+          if (seen.has(key)) continue; // dedupe by destination name
+          seen.add(key);
+          suggestions.push({ id: r._id, name, address, rideId: r._id });
+          if (suggestions.length >= 15) break;
+        }
+        setPlaces(suggestions);
+        setUsedFallback(false);
+      } catch (e: any) {
+        setPlaces([]);
+        setUsedFallback(false);
+        setError(e?.message || 'Failed to load suggestions');
+      } finally {
+        setLoading(false);
       }
     })();
   }, []);
 
-  const handleSelectPlace = (place: { name: string; address: string }) => {
-    navigation.navigate('AvailableRides', { destination: place });
+  const handleSelectPlace = (place: { name: string; address: string; rideId?: string }) => {
+    if (place.rideId) {
+      navigation.navigate('AvailableRides', { rideId: place.rideId });
+    } else {
+      navigation.navigate('AvailableRides', { destination: { name: place.name, address: place.address } });
+    }
   };
 
   const filteredPlaces = destination
     ? places.filter(place => place.name.toLowerCase().includes(destination.toLowerCase()))
     : places;
+
+  const listHeaderText = loading ? 'Loading…' : 'Rides you can join';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -50,30 +86,50 @@ const PlanRideScreen: React.FC<PlanRideScreenProps> = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.inputContainer}>
-        <View style={styles.inputRow}>
-          <Ionicons name="search" size={24} color="#8E8E93" style={styles.inputIcon} />
-          <TextInput
-            style={styles.textInput}
-            placeholder="Where to?"
-            placeholderTextColor="#8E8E93"
-            value={destination}
-            onChangeText={setDestination}
-            autoFocus={true}
-          />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={100} style={{ flex: 1 }}>
+        <View style={styles.inputContainer}>
+          <View style={styles.inputRow}>
+            <Ionicons name="search" size={24} color="#8E8E93" style={styles.inputIcon} />
+            <TextInput
+              style={styles.textInput}
+              placeholder="Where to?"
+              placeholderTextColor="#8E8E93"
+              value={destination}
+              onChangeText={setDestination}
+              autoFocus={true}
+              returnKeyType="search"
+            />
+          </View>
         </View>
-      </View>
 
-      <FlatList
-        data={filteredPlaces}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.placeItem} onPress={() => handleSelectPlace(item)}>
-            <Text style={styles.placeName}>{item.name}</Text>
-          </TouchableOpacity>
+        {error ? (
+          <View style={[styles.centerBox, { paddingBottom: 24 }] }>
+            <Ionicons name="warning-outline" size={28} color="#FF453A" />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={filteredPlaces}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity style={styles.placeItem} onPress={() => handleSelectPlace(item)}>
+                <Text style={styles.placeName}>{item.name}</Text>
+                {!!item.address && <Text style={styles.placeAddress}>{item.address}</Text>}
+              </TouchableOpacity>
+            )}
+            ListHeaderComponent={<Text style={styles.listHeader}>{listHeaderText}</Text>}
+            ListEmptyComponent={!loading ? (
+              <View style={[styles.centerBox, { paddingBottom: 48 }] }>
+                <Ionicons name="search" size={28} color="#8E8E93" />
+                <Text style={styles.emptyText}>No places found</Text>
+              </View>
+            ) : null}
+            contentContainerStyle={[filteredPlaces.length === 0 ? { flexGrow: 1 } : undefined, { paddingBottom: 40 }]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          />
         )}
-        ListHeaderComponent={<Text style={styles.listHeader}>Suggestions</Text>}
-      />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -124,6 +180,26 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     textAlign: 'center',
+  },
+  placeAddress: {
+    color: '#8E8E93',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  centerBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  errorText: {
+    color: '#FF453A',
+    marginTop: 8,
+  },
+  emptyText: {
+    color: '#8E8E93',
+    marginTop: 8,
   },
 });
 

@@ -15,11 +15,28 @@ export const createRateLimit = (windowMs: number = 15 * 60 * 1000, max: number =
   });
 };
 
-// General API rate limit
-export const apiRateLimit = createRateLimit(15 * 60 * 1000, 100); // 100 requests per 15 minutes
+// General API rate limit (skip /api/users/me; it has its own limiter)
+const apiWindow = 15 * 60 * 1000;
+const apiMax = process.env.NODE_ENV === 'production' ? 100 : 1000;
+export const apiRateLimit = rateLimit({
+  windowMs: apiWindow,
+  max: apiMax,
+  message: { error: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    const url = req.originalUrl || req.url || '';
+    return url.startsWith('/api/users/me');
+  },
+});
 
 // Strict rate limit for auth endpoints
 export const authRateLimit = createRateLimit(15 * 60 * 1000, 10); // 10 requests per 15 minutes
+
+// Higher limit for frequent identity polling from mobile app
+export const usersMeRateLimit = process.env.NODE_ENV === 'production'
+  ? createRateLimit(60 * 1000, 60) // 60 per minute in prod
+  : createRateLimit(60 * 1000, 600); // 600 per minute in dev
 
 // Emergency endpoint rate limit (more lenient for safety)
 export const emergencyRateLimit = createRateLimit(5 * 60 * 1000, 20); // 20 requests per 5 minutes

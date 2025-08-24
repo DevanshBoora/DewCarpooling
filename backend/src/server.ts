@@ -14,7 +14,8 @@ import {
   sanitizeInput, 
   requestLogger,
   apiRateLimit,
-  authRateLimit 
+  authRateLimit,
+  usersMeRateLimit 
 } from './middleware/securityMiddleware';
 
 import userRoutes from './routes/userRoutes';
@@ -80,6 +81,9 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Rate limiting
+// Apply a higher/specialized limit for identity polling first
+app.use('/api/users/me', usersMeRateLimit);
+// Then apply general API and auth-specific limits
 app.use('/api/', apiRateLimit);
 app.use('/api/auth/', authRateLimit);
 
