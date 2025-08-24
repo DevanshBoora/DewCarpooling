@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Dew Carpooling",
+    "slug": "dew-carpooling",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "owner": "",
+    "scheme": "dewcarpooling",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dew.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Dew uses your location to show nearby rides and your community.",
+        "NSCameraUsageDescription": "Dew needs camera access to let you take a profile or verification photo.",
+        "NSPhotoLibraryUsageDescription": "Dew needs photo library access to let you choose a profile or verification photo."
+      },
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "config": {
+        "googleMapsApiKey": "${GOOGLE_MAPS_API_KEY}"
+      }
+    },
+    "android": {
+      "package": "dew",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "config": {
+        "googleMaps": {
+          "apiKey": "${GOOGLE_MAPS_API_KEY}"
+        }
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-localization"
+    ]
+  }
+}
