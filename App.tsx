@@ -29,6 +29,7 @@ import {
   SettingsScreen,
   ProfileSetupScreen,
 } from './src/screens';
+import DriverVerificationScreen from './src/screens/DriverVerificationScreenSimple';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator<RootStackParamList>();
@@ -113,6 +114,7 @@ const AccountStack = () => (
     <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
     <Stack.Screen name="Help" component={HelpScreen} options={{ title: 'Help & Support' }} />
     <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: false }} />
+    <Stack.Screen name="DriverVerification" component={DriverVerificationScreen} options={{ headerShown: false }} />
   </Stack.Navigator>
 );
 

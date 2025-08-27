@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import RideTracking, { IRideTracking } from '../models/RideTracking';
 import Ride from '../models/Ride';
+import User from '../models/User';
 import { AuthedRequest } from '../middleware/authMiddleware';
 
 // WebSocket server instance (will be set from server.ts)
@@ -262,6 +263,70 @@ export const completeRide = async (req: AuthedRequest, res: Response) => {
 
     // Update the main ride status
     await Ride.findByIdAndUpdate(tracking.ride, { status: 'completed' });
+
+    // Compute and persist CO2 savings for this ride
+    try {
+      const rideDoc = await Ride.findById(tracking.ride);
+      if (rideDoc && rideDoc.pickupLocation && rideDoc.dropoffLocation) {
+        const [startLng, startLat] = (rideDoc.pickupLocation as any)?.coordinates?.coordinates || [];
+        const [endLng, endLat] = (rideDoc.dropoffLocation as any)?.coordinates?.coordinates || [];
+
+        if (
+          typeof startLat === 'number' && typeof startLng === 'number' &&
+          typeof endLat === 'number' && typeof endLng === 'number'
+        ) {
+          const toRad = (v: number) => (v * Math.PI) / 180;
+          const R = 6371; // km
+          const dLat = toRad(endLat - startLat);
+          const dLon = toRad(endLng - startLng);
+          const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(startLat)) * Math.cos(toRad(endLat)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distanceKm = R * c;
+
+          // Simple estimate: average passenger car emits ~0.12 kg CO2 per km
+          const EMISSION_PER_KM = 0.12; // kg/km
+          const passengersCount = Array.isArray(tracking.passengers) ? tracking.passengers.length : 0;
+
+          // Savings model:
+          //  - Each passenger saves their own solo trip emissions
+          //  - Driver is facilitating shared trip; attribute same savings as one passenger
+          const perPersonSaved = distanceKm * EMISSION_PER_KM; // kg
+          const totalSavings = perPersonSaved * passengersCount; // total passengers saved
+
+          const updates: Array<Promise<any>> = [];
+
+          // Update driver
+          updates.push((async () => {
+            const driverUser = await User.findById(tracking.driver);
+            if (driverUser) {
+              const newCo2 = (driverUser.co2Saved || 0) + perPersonSaved;
+              const newImpact = Math.min(100, Math.round(newCo2)); // 1 kg => 1% towards 100 kg goal
+              await User.findByIdAndUpdate(driverUser._id, { co2Saved: newCo2, ecoImpact: newImpact }, { new: false });
+            }
+          })());
+
+          // Update passengers
+          tracking.passengers.forEach((pid) => {
+            updates.push((async () => {
+              const passengerUser = await User.findById(pid);
+              if (passengerUser) {
+                const newCo2 = (passengerUser.co2Saved || 0) + perPersonSaved;
+                const newImpact = Math.min(100, Math.round(newCo2));
+                await User.findByIdAndUpdate(passengerUser._id, { co2Saved: newCo2, ecoImpact: newImpact }, { new: false });
+              }
+            })());
+          });
+
+          await Promise.allSettled(updates);
+        }
+      }
+    } catch (e) {
+      // Non-fatal: log and continue
+      console.warn('CO2 savings update failed:', e);
+    }
 
     // Notify all participants
     if (io) {

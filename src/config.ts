@@ -1,6 +1,6 @@
 // Central API configuration
 // Reads from EXPO_PUBLIC_API_URL for production. Fallback to local dev.
-export const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.48:5001';
+export const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.154:5001';
 
 // TEMP: Current user id used by actions like join ride.
 // Replace with the actual user ObjectId from your database seed.

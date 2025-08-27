@@ -9,81 +9,98 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-  Modal,
-  Pressable
+  Image,
+  Dimensions,
+  Animated,
+  Modal
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
+// Using existing API services
+import { 
+  submitDriverVerification, 
+  getDriverVerificationStatus,
+  DriverVerificationStatus as ServiceDriverVerificationStatus,
+  DriverVerificationData
+} from '../api/driverVerificationService';
 
-interface DriverVerificationStatus {
-  status: 'not_submitted' | 'pending' | 'in_review' | 'approved' | 'rejected' | 'expired';
-  identityDocument?: {
-    type: string;
-    verificationStatus: string;
-    verificationNotes?: string;
-  };
-  drivingLicense?: {
-    verificationStatus: string;
-    verificationNotes?: string;
-    expiryDate: string;
-  };
-  vehicle?: {
-    make: string;
-    model: string;
-    year: number;
-    color: string;
-    licensePlate: string;
-    verificationStatus: string;
-    verificationNotes?: string;
-    insuranceExpiryDate: string;
-  };
-  backgroundCheck?: {
-    status: string;
-    completedAt?: string;
-    notes?: string;
-  };
-  approvedAt?: string;
-  rejectedAt?: string;
-  rejectionReason?: string;
-  expiresAt?: string;
-}
+type ExtendedDriverVerificationStatus = 
+  | (ServiceDriverVerificationStatus & { expiresAt?: string })
+  | {
+      id?: string;
+      userId?: string;
+      status: 'not_submitted' | 'in_review';
+      submittedAt?: Date;
+      reviewedAt?: Date;
+      rejectionReason?: string;
+      faceImageId?: string;
+      drivingLicense?: {
+        frontImageId: string;
+        backImageId: string;
+      };
+      vehicle?: {
+        make: string;
+        model: string;
+        color: string;
+        licensePlate: string;
+      };
+      expiresAt?: string;
+    };
+
+type VerificationStep = 'welcome' | 'photo' | 'license' | 'vehicle' | 'review' | 'submitted';
+
+const { width } = Dimensions.get('window');
+
+const steps = [
+  { key: 'welcome', title: 'Welcome', icon: 'hand-left-outline' },
+  { key: 'photo', title: 'Photo', icon: 'camera-outline' },
+  { key: 'license', title: 'License', icon: 'card-outline' },
+  { key: 'vehicle', title: 'Vehicle', icon: 'car-outline' },
+  { key: 'review', title: 'Review', icon: 'checkmark-circle-outline' }
+];
 
 const DriverVerificationScreen: React.FC = () => {
   const navigation = useNavigation();
-  const [status, setStatus] = useState<DriverVerificationStatus | null>(null);
+  const [status, setStatus] = useState<ExtendedDriverVerificationStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [currentStep, setCurrentStep] = useState<VerificationStep>('welcome');
   const [showForm, setShowForm] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState<string | null>(null);
 
-  // Form state
+  // Complete form state matching service interface
   const [formData, setFormData] = useState({
-    identityDocument: {
-      type: 'drivers_license' as 'passport' | 'drivers_license' | 'national_id',
-      documentNumber: '',
-      frontImageId: '',
-      backImageId: ''
-    },
+    faceImageId: '',
     drivingLicense: {
+      frontImageId: '',
+      backImageId: '',
       licenseNumber: '',
-      expiryDate: new Date(),
       issuingAuthority: '',
-      imageId: ''
+      expiryDate: new Date()
     },
     vehicle: {
       make: '',
       model: '',
-      year: new Date().getFullYear(),
       color: '',
       licensePlate: '',
+      year: new Date().getFullYear(),
       registrationImageId: '',
       insuranceImageId: '',
       insuranceExpiryDate: new Date()
+    },
+    identityDocument: {
+      type: 'drivers_license' as 'drivers_license' | 'passport' | 'national_id',
+      documentNumber: '',
+      frontImageId: '',
+      backImageId: ''
     }
   });
 
-  const [showDatePicker, setShowDatePicker] = useState<'license' | 'insurance' | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const progressAnim = new Animated.Value(0);
 
   useEffect(() => {
     loadVerificationStatus();
@@ -92,16 +109,22 @@ const DriverVerificationScreen: React.FC = () => {
   const loadVerificationStatus = async () => {
     try {
       setLoading(true);
-      // TODO: Replace with actual API call
-      // const response = await api.get('/api/driver-verification/status');
-      // setStatus(response.data);
-      
-      // Mock data for now
-      setStatus({
-        status: 'not_submitted'
-      });
+      const response = await getDriverVerificationStatus();
+      if (response) {
+        setStatus({
+          ...response,
+          status: response.status === 'pending' ? 'pending' : response.status as any
+        });
+      } else {
+        setStatus({
+          status: 'not_submitted'
+        } as ExtendedDriverVerificationStatus);
+      }
     } catch (error) {
       Alert.alert('Error', 'Failed to load verification status');
+      setStatus({
+        status: 'not_submitted'
+      } as ExtendedDriverVerificationStatus);
     } finally {
       setLoading(false);
     }
@@ -141,7 +164,7 @@ const DriverVerificationScreen: React.FC = () => {
         case 'license':
           setFormData(prev => ({
             ...prev,
-            drivingLicense: { ...prev.drivingLicense, imageId }
+            drivingLicense: { ...prev.drivingLicense, frontImageId: imageId }
           }));
           break;
         case 'registration':
@@ -174,14 +197,53 @@ const DriverVerificationScreen: React.FC = () => {
         Alert.alert('Missing Information', 'License number is required');
         return;
       }
+      if (!formData.drivingLicense.issuingAuthority.trim()) {
+        Alert.alert('Missing Information', 'Issuing authority is required');
+        return;
+      }
       
       if (!formData.vehicle.make.trim() || !formData.vehicle.model.trim()) {
         Alert.alert('Missing Information', 'Vehicle make and model are required');
         return;
       }
+      if (!formData.vehicle.licensePlate.trim()) {
+        Alert.alert('Missing Information', 'Vehicle license plate is required');
+        return;
+      }
+      if (!formData.vehicle.insuranceExpiryDate) {
+        Alert.alert('Missing Information', 'Insurance expiry date is required');
+        return;
+      }
 
-      // TODO: Replace with actual API call
-      // await api.post('/api/driver-verification/submit', formData);
+      // Prepare data for API
+      const toDateOnly = (d: Date) => d.toISOString().slice(0, 10);
+      const verificationData: DriverVerificationData = {
+        identityDocument: {
+          type: formData.identityDocument.type,
+          documentNumber: formData.identityDocument.documentNumber,
+          frontImageId: formData.identityDocument.frontImageId || undefined,
+          backImageId: formData.identityDocument.backImageId || undefined,
+        },
+        drivingLicense: {
+          licenseNumber: formData.drivingLicense.licenseNumber,
+          issuingAuthority: formData.drivingLicense.issuingAuthority,
+          expiryDate: toDateOnly(formData.drivingLicense.expiryDate),
+          imageId: formData.drivingLicense.frontImageId || undefined,
+          frontImageId: formData.drivingLicense.frontImageId || undefined,
+          backImageId: formData.drivingLicense.backImageId || undefined,
+        },
+        vehicle: {
+          make: formData.vehicle.make,
+          model: formData.vehicle.model,
+          year: formData.vehicle.year,
+          color: formData.vehicle.color,
+          licensePlate: formData.vehicle.licensePlate,
+          insuranceExpiryDate: toDateOnly(formData.vehicle.insuranceExpiryDate),
+        },
+        faceImageId: formData.faceImageId || undefined,
+      };
+      
+      await submitDriverVerification(verificationData);
       
       Alert.alert(
         'Verification Submitted',
@@ -434,7 +496,7 @@ const DriverVerificationScreen: React.FC = () => {
               >
                 <Ionicons name="camera" size={20} color="#3c7d68" />
                 <Text style={styles.uploadButtonText}>
-                  {formData.drivingLicense.imageId ? 'License Image ✓' : 'Upload License Image'}
+                  {formData.drivingLicense.frontImageId ? 'License Image ✓' : 'Upload License Image'}
                 </Text>
               </TouchableOpacity>
             </View>

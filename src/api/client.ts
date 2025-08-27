@@ -10,6 +10,11 @@ export const clearAuthToken = () => {
   token = null;
 };
 
+// Helper for non-JSON requests to include Authorization header when available
+export const getAuthHeader = (): Record<string, string> => {
+  return token ? { Authorization: token } : {};
+};
+
 type UnauthorizedCb = () => void;
 const unauthorizedListeners: UnauthorizedCb[] = [];
 export const onUnauthorized = (cb: UnauthorizedCb) => {

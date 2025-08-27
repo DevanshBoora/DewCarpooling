@@ -186,7 +186,7 @@ const AccountScreen: React.FC = () => {
         {/* Offering Rides Card */}
         <Pressable
           style={[styles.card, styles.offeringRidesCard]}
-          onPress={() => Alert.alert('Offering Rides', 'Navigate to driver setup')}
+          onPress={() => stackNav.navigate('DriverVerification')}
           hitSlop={8}
           android_ripple={{ color: '#2a2a2a' }}
           accessibilityRole="button"
