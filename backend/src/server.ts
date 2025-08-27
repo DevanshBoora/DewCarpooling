@@ -29,6 +29,7 @@ import trustedContactRoutes from './routes/trustedContactRoutes';
 import driverVerificationRoutes from './routes/driverVerificationRoutes';
 import rideTrackingRoutes from './routes/rideTrackingRoutes';
 import incidentRoutes from './routes/incidentRoutes';
+import ocrRoutes from './routes/ocrRoutes';
 import { initFileBucket } from './controllers/fileController';
 import { setSocketServer } from './controllers/rideTrackingController';
 
@@ -102,6 +103,7 @@ app.use('/api/trusted-contacts', trustedContactRoutes);
 app.use('/api/driver-verification', driverVerificationRoutes);
 app.use('/api/ride-tracking', rideTrackingRoutes);
 app.use('/api/incidents', incidentRoutes);
+app.use('/api/ocr', ocrRoutes);
 
 // MongoDB Connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/dewcarpooling';

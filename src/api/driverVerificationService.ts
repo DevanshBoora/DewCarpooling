@@ -20,10 +20,10 @@ export interface DriverVerificationData {
   vehicle: {
     make: string;
     model: string;
-    year: number;
     color: string;
     licensePlate: string;
-    insuranceExpiryDate: string; // YYYY-MM-DD
+    year?: number;
+    insuranceExpiryDate?: string; // YYYY-MM-DD
   };
   faceImageId?: string; // optional selfie image id if captured
 }
@@ -53,10 +53,10 @@ export interface DriverVerificationStatus {
   vehicle: {
     make: string;
     model: string;
-    year: number;
+    year?: number;
     color: string;
     licensePlate: string;
-    insuranceExpiryDate: string;
+    insuranceExpiryDate?: string;
   };
 }
 

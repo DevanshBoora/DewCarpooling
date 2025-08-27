@@ -7,42 +7,101 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Alert,
   ActivityIndicator,
+  Alert,
   Dimensions,
-  Animated
+  Animated,
+  Image
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import { uploadFile } from '../api/fileService';
 import { submitDriverVerification } from '../api/driverVerificationService';
+import { uploadLicenseImageAndParse } from '../api/ocrService';
 
-type VerificationStep = 'welcome' | 'photo' | 'license' | 'vehicle' | 'review' | 'submitted';
+type VerificationStep = 'photo' | 'license' | 'vehicle';
 
 const { width } = Dimensions.get('window');
 
 const steps = [
-  { key: 'photo', title: 'Photo', icon: 'camera-outline' },
-  { key: 'license', title: 'License', icon: 'card-outline' },
-  { key: 'vehicle', title: 'Vehicle', icon: 'car-outline' },
-  { key: 'review', title: 'Review', icon: 'checkmark-circle-outline' }
+  { key: 'photo', title: 'Photo' },
+  { key: 'license', title: 'License' },
+  { key: 'vehicle', title: 'Vehicle' },
 ];
 
 const DriverVerificationScreen: React.FC = () => {
   const navigation = useNavigation();
+  // @ts-ignore - route params are loosely typed for simplicity here
+  const route: any = useRoute();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [currentStep, setCurrentStep] = useState<VerificationStep>('welcome');
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [currentStep, setCurrentStep] = useState<VerificationStep>('photo');
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [faceImageUri, setFaceImageUri] = useState<string>('');
+  const [licenseImageUri, setLicenseImageUri] = useState<string>('');
+  const [showIssueDatePicker, setShowIssueDatePicker] = useState(false);
   const progressAnim = new Animated.Value(0);
+
+  // Simple Indian state/UT validation for issuing authority
+  const IN_STATES_UT = [
+    'ANDHRA PRADESH','ARUNACHAL PRADESH','ASSAM','BIHAR','CHHATTISGARH','GOA','GUJARAT','HARYANA','HIMACHAL PRADESH','JHARKHAND','KARNATAKA','KERALA','MADHYA PRADESH','MAHARASHTRA','MANIPUR','MEGHALAYA','MIZORAM','NAGALAND','ODISHA','PUNJAB','RAJASTHAN','SIKKIM','TAMIL NADU','TELANGANA','TRIPURA','UTTAR PRADESH','UTTARAKHAND','WEST BENGAL',
+    'ANDAMAN AND NICOBAR','ANDAMAN & NICOBAR','CHANDIGARH','DADRA AND NAGAR HAVELI','DADRA & NAGAR HAVELI','DAMAN AND DIU','DAMAN & DIU','DELHI','JAMMU AND KASHMIR','JAMMU & KASHMIR','LADAKH','LAKSHADWEEP','PUDUCHERRY','PONDICHERRY'
+  ];
+  const isValidIndianStateInAuthority = (authority: string) => {
+    const up = (authority || '').toUpperCase();
+    return IN_STATES_UT.some(s => up.includes(s));
+  };
+
+  const titleCase = (s: string) => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  const cleanAuthority = (s: string) => s.replace(/[^A-Za-z\s\-]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  const extractStateFromAuthority = (authority: string): string | undefined => {
+    const up = (authority || '').toUpperCase();
+    const match = IN_STATES_UT.find(s => up.includes(s));
+    return match ? titleCase(match) : undefined;
+  };
+
+  const normalizeLicenseNumber = (value: string) => value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const normalizeDateToYMD = (input?: string): string => {
+    if (!input) return '';
+    const s = input.replace(/\./g, '-').replace(/\//g, '-').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+    if (m) {
+      const dd = m[1].padStart(2, '0');
+      const mm = m[2].padStart(2, '0');
+      const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    const d = new Date(input);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return input;
+  };
+
+  const addYearsToYMD = (ymd: string, years: number): string => {
+    // ymd: YYYY-MM-DD
+    const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return ymd;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setFullYear(d.getFullYear() + years);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
 
   // Expanded form state to satisfy backend validation
   const [formData, setFormData] = useState({
     faceImageId: '',
     identityDocument: {
-      type: 'drivers_license', // passport | drivers_license | national_id
+      type: 'drivers_license', // fixed; not shown in UI
       documentNumber: '',
       frontImageId: '',
       backImageId: '',
@@ -52,6 +111,7 @@ const DriverVerificationScreen: React.FC = () => {
       backImageId: '',
       licenseNumber: '',
       expiryDate: '', // YYYY-MM-DD
+      issueDate: '', // YYYY-MM-DD
       issuingAuthority: '',
     },
     vehicle: {
@@ -59,21 +119,137 @@ const DriverVerificationScreen: React.FC = () => {
       model: '',
       color: '',
       licensePlate: '',
-      year: '', // keep as string in state; convert to number on submit
-      insuranceExpiryDate: '', // YYYY-MM-DD
     }
   });
 
-  useEffect(() => {
-    if (currentStep !== 'welcome' && currentStep !== 'submitted') {
-      const stepIndex = steps.findIndex(step => step.key === currentStep);
-      Animated.timing(progressAnim, {
-        toValue: (stepIndex + 1) / steps.length,
-        duration: 300,
-        useNativeDriver: false,
-      }).start();
+  // Server OCR flow: choose Camera or Gallery, upload to backend OCR, and prefill fields
+  const handleServerOcrPress = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        // Still allow gallery without camera permission
+        return pickFromGalleryForOcr();
+      }
+      Alert.alert(
+        'Scan License',
+        'Choose how to provide the license photo',
+        [
+          { text: 'Camera', onPress: () => launchCameraForOcr() },
+          { text: 'Gallery', onPress: () => pickFromGalleryForOcr() },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    } catch {}
+  };
+
+  const launchCameraForOcr = async () => {
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets[0]) {
+        await runServerOcr(result.assets[0].uri);
+      }
+    } catch {}
+  };
+
+  const pickFromGalleryForOcr = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets[0]) {
+        await runServerOcr(result.assets[0].uri);
+      }
+    } catch {}
+  };
+
+  const runServerOcr = async (uri: string) => {
+    try {
+      setOcrBusy(true);
+      const { parsed, rawText } = await uploadLicenseImageAndParse(uri);
+
+      // Fallbacks if parser missed fields
+      let licenseFromOcr = (parsed as any).licenseNumber as string | undefined;
+      if (!licenseFromOcr && rawText) {
+        const textUp = rawText.toUpperCase();
+        const candidates = Array.from(textUp.matchAll(/\b([A-Z]{2}[A-Z0-9\s-]{8,})\b/g)).map(m => m[1]);
+        const normalized = candidates
+          .map(c => c.replace(/[^A-Z0-9]/g, ''))
+          .filter(c => /^[A-Z]{2}\d{8,}$/.test(c))
+          .sort((a, b) => b.length - a.length);
+        if (normalized[0]) licenseFromOcr = normalized[0];
+      }
+
+      let issue = normalizeDateToYMD((parsed as any).issueDate || (parsed as any).dateOfIssue || (parsed as any).doi);
+      if (!issue && rawText) {
+        const anyDate = rawText.match(/(\d{1,2}[\-\/.]\d{1,2}[\-\/.]\d{2,4})/);
+        if (anyDate) issue = normalizeDateToYMD(anyDate[1]);
+      }
+
+      const expiry = normalizeDateToYMD((parsed as any).validityNT || (parsed as any).validityTR);
+      const rawAuthority = (parsed as any).issuingAuthority || '';
+      const cleanedAuthority = cleanAuthority(rawAuthority);
+      const inferredState = extractStateFromAuthority(cleanedAuthority);
+      setFormData(prev => ({
+        ...prev,
+        identityDocument: {
+          ...prev.identityDocument,
+          documentNumber: licenseFromOcr || prev.identityDocument.documentNumber,
+        },
+        drivingLicense: {
+          ...prev.drivingLicense,
+          licenseNumber: licenseFromOcr || prev.drivingLicense.licenseNumber,
+          expiryDate: expiry || prev.drivingLicense.expiryDate,
+          issueDate: issue || prev.drivingLicense.issueDate,
+          issuingAuthority: inferredState || cleanedAuthority || prev.drivingLicense.issuingAuthority,
+        },
+      }));
+      setLicenseImageUri(uri);
+      Alert.alert('Scan complete', 'We filled detected fields and added a preview. Please review and edit if needed.');
+    } catch (err: any) {
+      Alert.alert('Scan failed', err?.message || 'Could not extract text from the image. Try a clearer photo.');
+    } finally {
+      setOcrBusy(false);
     }
+  };
+
+  useEffect(() => {
+    const stepIndex = steps.findIndex(step => step.key === currentStep);
+    Animated.timing(progressAnim, {
+      toValue: (stepIndex + 1) / steps.length,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
   }, [currentStep]);
+
+  // Merge scan results from ScanLicense screen
+  useEffect(() => {
+    if (route?.params?.scanResult) {
+      const { scanResult } = route.params as { scanResult: { licenseNumber?: string; expiryDate?: string; issuingAuthority?: string; documentNumber?: string } };
+      setFormData(prev => ({
+        ...prev,
+        identityDocument: {
+          ...prev.identityDocument,
+          documentNumber: scanResult.documentNumber || prev.identityDocument.documentNumber,
+        },
+        drivingLicense: {
+          ...prev.drivingLicense,
+          licenseNumber: scanResult.licenseNumber || prev.drivingLicense.licenseNumber,
+          expiryDate: scanResult.expiryDate || prev.drivingLicense.expiryDate,
+          issuingAuthority: scanResult.issuingAuthority || prev.drivingLicense.issuingAuthority,
+        },
+      }));
+      // Clear param so it doesn't re-apply
+      navigation.setParams?.({ scanResult: undefined } as any);
+    }
+  }, [route?.params?.scanResult]);
 
   const uploadImage = async (imageUri: string): Promise<string> => {
     try {
@@ -139,6 +315,7 @@ const DriverVerificationScreen: React.FC = () => {
       
       if (type === 'face') {
         setFormData(prev => ({ ...prev, faceImageId: fileId }));
+        setFaceImageUri(uri);
       } else if (type === 'license-front') {
         setFormData(prev => ({
           ...prev,
@@ -146,6 +323,7 @@ const DriverVerificationScreen: React.FC = () => {
           drivingLicense: { ...prev.drivingLicense, frontImageId: fileId },
           identityDocument: { ...prev.identityDocument, frontImageId: fileId }
         }));
+        setLicenseImageUri(uri);
       } else if (type === 'license-back') {
         setFormData(prev => ({
           ...prev,
@@ -159,7 +337,7 @@ const DriverVerificationScreen: React.FC = () => {
   };
 
   const nextStep = () => {
-    const stepOrder: VerificationStep[] = ['welcome', 'photo', 'license', 'vehicle', 'review'];
+    const stepOrder: VerificationStep[] = ['photo', 'license', 'vehicle'];
     const currentIndex = stepOrder.indexOf(currentStep);
     if (currentIndex < stepOrder.length - 1) {
       setCurrentStep(stepOrder[currentIndex + 1]);
@@ -167,7 +345,7 @@ const DriverVerificationScreen: React.FC = () => {
   };
 
   const prevStep = () => {
-    const stepOrder: VerificationStep[] = ['welcome', 'photo', 'license', 'vehicle', 'review'];
+    const stepOrder: VerificationStep[] = ['photo', 'license', 'vehicle'];
     const currentIndex = stepOrder.indexOf(currentStep);
     if (currentIndex > 0) {
       setCurrentStep(stepOrder[currentIndex - 1]);
@@ -176,31 +354,22 @@ const DriverVerificationScreen: React.FC = () => {
 
   const canProceedFromStep = (step: VerificationStep): boolean => {
     switch (step) {
-      case 'welcome':
-        return true;
       case 'photo':
         return formData.faceImageId !== '';
       case 'license':
         return (
-          formData.drivingLicense.frontImageId !== '' &&
-          formData.drivingLicense.backImageId !== '' &&
-          formData.identityDocument.type.trim() !== '' &&
-          formData.identityDocument.documentNumber.trim() !== '' &&
           formData.drivingLicense.licenseNumber.trim() !== '' &&
-          formData.drivingLicense.expiryDate.trim() !== '' &&
-          formData.drivingLicense.issuingAuthority.trim() !== ''
+          formData.drivingLicense.issueDate.trim() !== '' &&
+          formData.drivingLicense.issuingAuthority.trim() !== '' &&
+          isValidIndianStateInAuthority(formData.drivingLicense.issuingAuthority)
         );
       case 'vehicle':
         return (
           formData.vehicle.make.trim() !== '' &&
           formData.vehicle.model.trim() !== '' &&
           formData.vehicle.color.trim() !== '' &&
-          formData.vehicle.licensePlate.trim() !== '' &&
-          formData.vehicle.year.trim() !== '' &&
-          formData.vehicle.insuranceExpiryDate.trim() !== ''
+          formData.vehicle.licensePlate.trim() !== ''
         );
-      case 'review':
-        return true;
       default:
         return false;
     }
@@ -211,33 +380,43 @@ const DriverVerificationScreen: React.FC = () => {
       setSubmitting(true);
       
       // Build payload matching backend validation
+      const licenseNumber = normalizeLicenseNumber(formData.drivingLicense.licenseNumber);
+      const issuingAuthority = formData.drivingLicense.issuingAuthority.trim();
+      const issueDateYMD = normalizeDateToYMD(formData.drivingLicense.issueDate.trim());
+      const existingExpiryYMD = normalizeDateToYMD(formData.drivingLicense.expiryDate.trim());
+      const expiryDate = existingExpiryYMD || (issueDateYMD ? addYearsToYMD(issueDateYMD, 10) : '');
+      if (!expiryDate) {
+        Alert.alert('Missing date', 'Please provide an Issue Date so we can validate your license.');
+        setSubmitting(false);
+        return;
+      }
+      const documentNumber = (formData.identityDocument.documentNumber || licenseNumber).trim();
       const submissionData = {
         identityDocument: {
           type: formData.identityDocument.type as 'passport' | 'drivers_license' | 'national_id',
-          documentNumber: formData.identityDocument.documentNumber,
+          documentNumber,
           frontImageId: formData.identityDocument.frontImageId || undefined,
           backImageId: formData.identityDocument.backImageId || undefined,
         },
         drivingLicense: {
-          licenseNumber: formData.drivingLicense.licenseNumber,
-          expiryDate: formData.drivingLicense.expiryDate,
-          issuingAuthority: formData.drivingLicense.issuingAuthority,
+          licenseNumber,
+          expiryDate,
+          issuingAuthority,
           // map front image to license image if present
           imageId: formData.drivingLicense.frontImageId || undefined,
         },
         vehicle: {
           make: formData.vehicle.make,
           model: formData.vehicle.model,
-          year: Math.max(parseInt(formData.vehicle.year || '0', 10) || 0, 0),
           color: formData.vehicle.color,
           licensePlate: formData.vehicle.licensePlate,
-          insuranceExpiryDate: formData.vehicle.insuranceExpiryDate,
         }
       };
 
       await submitDriverVerification(submissionData);
-      setCurrentStep('submitted');
-      Alert.alert('Success!', 'Your verification has been submitted. We\'ll review it within 24-48 hours.');
+      Alert.alert('Success', 'Your verification has been submitted. We\'ll review it within 24-48 hours.');
+      // Go back to previous screen after submit
+      (navigation as any).goBack();
     } catch (error) {
       console.error('Submission failed:', error);
       Alert.alert('Submission Failed', 'Failed to submit verification. Please try again.');
@@ -246,115 +425,26 @@ const DriverVerificationScreen: React.FC = () => {
     }
   };
 
-  const renderProgressBar = () => (
-    <View style={styles.progressContainer}>
-      <View style={styles.progressBar}>
-        <Animated.View 
-          style={[
-            styles.progressFill,
-            {
-              width: progressAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: ['0%', '100%'],
-              }),
-            },
-          ]} 
-        />
-      </View>
-      <View style={styles.stepIndicators}>
-        {steps.map((step, index) => {
-          const isActive = step.key === currentStep;
-          const isCompleted = steps.findIndex(s => s.key === currentStep) > index;
-          return (
-            <View key={step.key} style={styles.stepIndicator}>
-              <View style={[
-                styles.stepCircle,
-                isActive && styles.stepCircleActive,
-                isCompleted && styles.stepCircleCompleted
-              ]}>
-                <Ionicons 
-                  name={isCompleted ? 'checkmark' : step.icon as any} 
-                  size={16} 
-                  color={isActive || isCompleted ? '#FFFFFF' : '#666666'} 
-                />
-              </View>
-              <Text style={[
-                styles.stepTitle,
-                isActive && styles.stepTitleActive
-              ]}>
-                {step.title}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
+  const renderProgressBar = () => null;
 
-  const renderWelcomeStep = () => (
-    <View style={styles.stepContainer}>
-      <LinearGradient
-        colors={['#4CE5B1', '#3c7d68']}
-        style={styles.welcomeHeader}
-      >
-        <Ionicons name="car-sport" size={60} color="#FFFFFF" />
-        <Text style={styles.welcomeTitle}>Become a Dew Driver! 🚗</Text>
-        <Text style={styles.welcomeSubtitle}>
-          Join our community of eco-conscious drivers and start earning while helping reduce carbon emissions.
-        </Text>
-      </LinearGradient>
-      
-      <View style={styles.benefitsContainer}>
-        <Text style={styles.sectionTitle}>Why drive with us?</Text>
-        
-        <View style={styles.benefitItem}>
-          <Ionicons name="cash-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.benefitText}>Earn money for each ride</Text>
-        </View>
-        
-        <View style={styles.benefitItem}>
-          <Ionicons name="leaf-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.benefitText}>Help save the environment</Text>
-        </View>
-        
-        <View style={styles.benefitItem}>
-          <Ionicons name="people-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.benefitText}>Meet amazing people</Text>
-        </View>
-      </View>
-
-      <View style={styles.processInfo}>
-        <Text style={styles.processTitle}>Quick 3-step process:</Text>
-        <Text style={styles.processText}>📸 Take a quick selfie</Text>
-        <Text style={styles.processText}>🆔 Snap your license (both sides)</Text>
-        <Text style={styles.processText}>🚗 Add your car details</Text>
-        <Text style={styles.processSubtext}>Takes less than 5 minutes!</Text>
-      </View>
-    </View>
-  );
+  const renderWelcomeStep = () => null;
 
   const renderPhotoStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepHeader}>📸 Quick Selfie</Text>
-      <Text style={styles.stepDescription}>
-        This will be your driver profile photo. Make sure you look friendly! 😊
-      </Text>
+      <Text style={styles.stepHeader}>Profile Photo</Text>
+      <Text style={styles.stepDescription}>Add a clear photo of yourself.</Text>
       
       <TouchableOpacity 
         style={styles.photoContainer}
         onPress={() => captureImage('face')}
         disabled={uploadingImage}
       >
-        {formData.faceImageId ? (
-          <View style={styles.photoPreview}>
-            <Ionicons name="checkmark-circle" size={50} color="#4CE5B1" />
-            <Text style={styles.photoPreviewText}>Perfect! 🎉</Text>
-          </View>
+        {faceImageUri ? (
+          <Image source={{ uri: faceImageUri }} style={styles.photoPreview} />
         ) : (
           <View style={styles.photoPlaceholder}>
-            <Ionicons name="camera-outline" size={60} color="#666666" />
             <Text style={styles.photoPlaceholderText}>
-              {uploadingImage ? 'Uploading...' : 'Tap to take photo'}
+              {uploadingImage ? 'Uploading...' : 'Tap to add photo'}
             </Text>
             {uploadingImage && <ActivityIndicator size="small" color="#4CE5B1" style={{ marginTop: 10 }} />}
           </View>
@@ -365,81 +455,35 @@ const DriverVerificationScreen: React.FC = () => {
 
   const renderLicenseStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepHeader}>🆔 Driver's License</Text>
-      <Text style={styles.stepDescription}>
-        We need both sides for verification. Don't worry, your info is secure! 🔒
-      </Text>
-      
-      <View style={styles.licenseContainer}>
-        <TouchableOpacity 
-          style={styles.licenseCard}
-          onPress={() => captureImage('license-front')}
-          disabled={uploadingImage}
+      <Text style={styles.stepHeader}>Driver's License</Text>
+      <Text style={styles.stepDescription}>Scan your license to auto-fill details. Then quickly review and edit if needed.</Text>
+
+      {/* Actions row: Scan and Upload side-by-side */}
+      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+        <TouchableOpacity
+          style={[styles.secondaryButton, { flex: 1 }]}
+          onPress={handleServerOcrPress}
+          disabled={ocrBusy}
         >
-          <Text style={styles.licenseCardTitle}>Front Side</Text>
-          {formData.drivingLicense.frontImageId ? (
-            <View style={styles.licensePreview}>
-              <Ionicons name="checkmark-circle" size={40} color="#4CE5B1" />
-              <Text style={styles.licensePreviewText}>Got it! ✅</Text>
-            </View>
-          ) : (
-            <View style={styles.licensePlaceholder}>
-              <Ionicons name="card-outline" size={50} color="#666666" />
-              <Text style={styles.licensePlaceholderText}>Tap to capture</Text>
-            </View>
-          )}
+          {ocrBusy ? <ActivityIndicator size="small" color="#4CE5B1" /> : null}
+          <Text style={styles.secondaryButtonText}>{ocrBusy ? 'Scanning...' : 'Scan License'}</Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={styles.licenseCard}
-          onPress={() => captureImage('license-back')}
-          disabled={uploadingImage}
+        <TouchableOpacity
+          style={[styles.secondaryButton, { flex: 1 }]}
+          onPress={pickFromGalleryForOcr}
+          disabled={ocrBusy}
         >
-          <Text style={styles.licenseCardTitle}>Back Side</Text>
-          {formData.drivingLicense.backImageId ? (
-            <View style={styles.licensePreview}>
-              <Ionicons name="checkmark-circle" size={40} color="#4CE5B1" />
-              <Text style={styles.licensePreviewText}>Got it! ✅</Text>
-            </View>
-          ) : (
-            <View style={styles.licensePlaceholder}>
-              <Ionicons name="card-outline" size={50} color="#666666" />
-              <Text style={styles.licensePlaceholderText}>Tap to capture</Text>
-            </View>
-          )}
+          <Text style={styles.secondaryButtonText}>Upload from Gallery</Text>
         </TouchableOpacity>
       </View>
-      
-      {/* Identity document + license details */}
+
+      {/* Smaller preview for aesthetics */}
+      {licenseImageUri ? (
+        <Image source={{ uri: licenseImageUri }} style={{ width: width - 80, height: 180, borderRadius: 12, alignSelf: 'center', marginBottom: 8, resizeMode: 'cover' }} />
+      ) : null}
+
       <View style={styles.formContainer}>
-        <View style={styles.inputRow}>
-          <View style={styles.inputHalf}>
-            <Text style={styles.inputLabel}>ID Type</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="drivers_license | passport | national_id"
-              placeholderTextColor="#666666"
-              value={formData.identityDocument.type}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                identityDocument: { ...prev.identityDocument, type: text as any }
-              }))}
-            />
-          </View>
-          <View style={styles.inputHalf}>
-            <Text style={styles.inputLabel}>ID Number</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Document number"
-              placeholderTextColor="#666666"
-              value={formData.identityDocument.documentNumber}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                identityDocument: { ...prev.identityDocument, documentNumber: text }
-              }))}
-            />
-          </View>
-        </View>
+
         <View style={styles.inputRow}>
           <View style={styles.inputHalf}>
             <Text style={styles.inputLabel}>License Number</Text>
@@ -448,10 +492,14 @@ const DriverVerificationScreen: React.FC = () => {
               placeholder="DL1234567"
               placeholderTextColor="#666666"
               value={formData.drivingLicense.licenseNumber}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                drivingLicense: { ...prev.drivingLicense, licenseNumber: text }
-              }))}
+              onChangeText={(text) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  drivingLicense: { ...prev.drivingLicense, licenseNumber: normalizeLicenseNumber(text) },
+                }))
+              }
+              autoCapitalize="characters"
+              autoCorrect={false}
             />
           </View>
           <View style={styles.inputHalf}>
@@ -461,46 +509,82 @@ const DriverVerificationScreen: React.FC = () => {
               placeholder="RTO / DMV"
               placeholderTextColor="#666666"
               value={formData.drivingLicense.issuingAuthority}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                drivingLicense: { ...prev.drivingLicense, issuingAuthority: text }
-              }))}
+              onChangeText={(text) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  drivingLicense: { 
+                    ...prev.drivingLicense, 
+                    issuingAuthority: extractStateFromAuthority(cleanAuthority(text)) || cleanAuthority(text)
+                  },
+                }))
+              }
+              autoCapitalize="words"
+              autoCorrect={false}
             />
           </View>
         </View>
+
         <View style={styles.inputRow}>
           <View style={styles.inputHalf}>
-            <Text style={styles.inputLabel}>License Expiry (YYYY-MM-DD)</Text>
+          <Text style={styles.inputLabel}>Issue Date (YYYY-MM-DD)</Text>
+          <View style={{ position: 'relative' }}>
             <TextInput
               style={styles.input}
-              placeholder="2026-12-31"
+              placeholder="2024-03-15"
               placeholderTextColor="#666666"
-              value={formData.drivingLicense.expiryDate}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                drivingLicense: { ...prev.drivingLicense, expiryDate: text }
-              }))}
+              value={formData.drivingLicense.issueDate}
+              onChangeText={(text) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  drivingLicense: { ...prev.drivingLicense, issueDate: text },
+                }))
+              }
+              onEndEditing={(e) => {
+                const value = normalizeDateToYMD(e.nativeEvent.text);
+                setFormData(prev => ({
+                  ...prev,
+                  drivingLicense: { ...prev.drivingLicense, issueDate: value }
+                }));
+              }}
             />
+            <TouchableOpacity
+              style={styles.calendarButton}
+              onPress={() => setShowIssueDatePicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={20} color="#4CE5B1" />
+            </TouchableOpacity>
           </View>
+          {showIssueDatePicker && (
+            <DateTimePicker
+              value={(formData.drivingLicense.issueDate && !isNaN(new Date(formData.drivingLicense.issueDate).getTime())) ? new Date(formData.drivingLicense.issueDate) : new Date()}
+              mode="date"
+              display="default"
+              onChange={(event, date) => {
+                setShowIssueDatePicker(false);
+                if (date) {
+                  const yyyy = date.getFullYear();
+                  const mm = String(date.getMonth() + 1).padStart(2, '0');
+                  const dd = String(date.getDate()).padStart(2, '0');
+                  const ymd = `${yyyy}-${mm}-${dd}`;
+                  setFormData(prev => ({
+                    ...prev,
+                    drivingLicense: { ...prev.drivingLicense, issueDate: ymd }
+                  }));
+                }
+              }}
+            />
+          )}
+        </View>
           <View style={styles.inputHalf} />
         </View>
       </View>
-
-      {uploadingImage && (
-        <View style={styles.uploadingContainer}>
-          <ActivityIndicator size="small" color="#4CE5B1" />
-          <Text style={styles.uploadingText}>Uploading...</Text>
-        </View>
-      )}
     </View>
   );
 
   const renderVehicleStep = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepHeader}>🚗 Your Ride</Text>
-      <Text style={styles.stepDescription}>
-        Tell us about your awesome car!
-      </Text>
+      <Text style={styles.stepHeader}>Vehicle</Text>
+      <Text style={styles.stepDescription}>Enter your vehicle details.</Text>
       
       <View style={styles.formContainer}>
         <View style={styles.inputRow}>
@@ -563,147 +647,37 @@ const DriverVerificationScreen: React.FC = () => {
           </View>
         </View>
 
-        <View style={styles.inputRow}>
-          <View style={styles.inputHalf}>
-            <Text style={styles.inputLabel}>Year</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="2018"
-              keyboardType="number-pad"
-              placeholderTextColor="#666666"
-              value={formData.vehicle.year}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                vehicle: { ...prev.vehicle, year: text }
-              }))}
-            />
-          </View>
-          <View style={styles.inputHalf}>
-            <Text style={styles.inputLabel}>Insurance Expiry (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="2026-12-31"
-              placeholderTextColor="#666666"
-              value={formData.vehicle.insuranceExpiryDate}
-              onChangeText={(text) => setFormData(prev => ({
-                ...prev,
-                vehicle: { ...prev.vehicle, insuranceExpiryDate: text }
-              }))}
-            />
-          </View>
-        </View>
+        {/* Year and Insurance Expiry removed per simplified requirements */}
       </View>
     </View>
   );
 
-  const renderReviewStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={styles.stepHeader}>✅ Almost Done!</Text>
-      <Text style={styles.stepDescription}>
-        Everything looks good? Let's submit for review!
-      </Text>
-      
-      <View style={styles.reviewContainer}>
-        <View style={styles.reviewSection}>
-          <Ionicons name="person-circle-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.reviewSectionTitle}>Profile Photo ✅</Text>
-        </View>
-        
-        <View style={styles.reviewSection}>
-          <Ionicons name="card-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.reviewSectionTitle}>Driver's License ✅</Text>
-        </View>
-        
-        <View style={styles.reviewSection}>
-          <Ionicons name="car-outline" size={24} color="#4CE5B1" />
-          <Text style={styles.reviewSectionTitle}>
-            {formData.vehicle.color} {formData.vehicle.make} {formData.vehicle.model} ({formData.vehicle.licensePlate})
-          </Text>
-        </View>
-      </View>
-      
-      <View style={styles.submitInfo}>
-        <Text style={styles.submitInfoText}>
-          🚀 We'll review everything within 24-48 hours and send you a notification when you're approved!
-        </Text>
-      </View>
-    </View>
-  );
+  const renderReviewStep = () => null;
 
-  const renderSubmittedStep = () => (
-    <View style={styles.stepContainer}>
-      <LinearGradient
-        colors={['#4CE5B1', '#3c7d68']}
-        style={styles.successContainer}
-      >
-        <Ionicons name="checkmark-circle" size={100} color="#FFFFFF" />
-        <Text style={styles.successTitle}>You're All Set! 🎉</Text>
-        <Text style={styles.successSubtitle}>
-          We're reviewing your info and will notify you soon!
-        </Text>
-      </LinearGradient>
-      
-      <View style={styles.nextStepsContainer}>
-        <Text style={styles.nextStepsTitle}>What's next?</Text>
-        
-        <View style={styles.nextStepItem}>
-          <Text style={styles.nextStepEmoji}>⏱️</Text>
-          <Text style={styles.nextStepText}>We review (24-48 hours)</Text>
-        </View>
-        
-        <View style={styles.nextStepItem}>
-          <Text style={styles.nextStepEmoji}>📱</Text>
-          <Text style={styles.nextStepText}>You get notified</Text>
-        </View>
-        
-        <View style={styles.nextStepItem}>
-          <Text style={styles.nextStepEmoji}>🚗</Text>
-          <Text style={styles.nextStepText}>Start earning!</Text>
-        </View>
-      </View>
-    </View>
-  );
+  const renderSubmittedStep = () => null;
 
   const renderStepContent = () => {
     switch (currentStep) {
-      case 'welcome':
-        return renderWelcomeStep();
       case 'photo':
         return renderPhotoStep();
       case 'license':
         return renderLicenseStep();
       case 'vehicle':
         return renderVehicleStep();
-      case 'review':
-        return renderReviewStep();
-      case 'submitted':
-        return renderSubmittedStep();
       default:
-        return renderWelcomeStep();
+        return renderPhotoStep();
     }
   };
 
   const renderNavigationButtons = () => {
-    if (currentStep === 'submitted') {
-      return (
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.primaryButtonText}>Back to Account</Text>
-        </TouchableOpacity>
-      );
-    }
-
     return (
       <View style={styles.navigationContainer}>
-        {currentStep !== 'welcome' && (
+        {currentStep !== 'photo' && (
           <TouchableOpacity
             style={styles.secondaryButton}
             onPress={prevStep}
             disabled={submitting}
           >
-            <Ionicons name="chevron-back" size={20} color="#4CE5B1" />
             <Text style={styles.secondaryButtonText}>Back</Text>
           </TouchableOpacity>
         )}
@@ -713,20 +687,13 @@ const DriverVerificationScreen: React.FC = () => {
             styles.primaryButton,
             !canProceedFromStep(currentStep) && styles.primaryButtonDisabled
           ]}
-          onPress={currentStep === 'review' ? submitVerification : nextStep}
+          onPress={currentStep === 'vehicle' ? submitVerification : nextStep}
           disabled={!canProceedFromStep(currentStep) || submitting}
         >
-          {submitting ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <Text style={styles.primaryButtonText}>
-                {currentStep === 'review' ? 'Submit for Review' : 'Continue'}
-              </Text>
-              {currentStep !== 'review' && (
-                <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
-              )}
-            </>
+          {submitting ? <ActivityIndicator size="small" color="#FFFFFF" /> : (
+            <Text style={styles.primaryButtonText}>
+              {currentStep === 'vehicle' ? 'Submit' : 'Continue'}
+            </Text>
           )}
         </TouchableOpacity>
       </View>
@@ -751,13 +718,13 @@ const DriverVerificationScreen: React.FC = () => {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Ionicons name="chevron-back" size={24} color="#FFFFFF" />
+          <Text style={{ color: '#FFFFFF', fontSize: 16 }}>Back</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Become a Driver</Text>
+        <Text style={styles.headerTitle}>Driver Verification</Text>
         <View style={styles.headerSpacer} />
       </View>
 
-      {currentStep !== 'welcome' && currentStep !== 'submitted' && renderProgressBar()}
+      {renderProgressBar()}
 
       <ScrollView 
         style={styles.content}
@@ -1055,6 +1022,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     borderWidth: 1,
     borderColor: '#333333',
+  },
+  calendarButton: {
+    position: 'absolute',
+    right: 12,
+    top: 14,
+    padding: 4,
   },
   reviewContainer: {
     marginBottom: 30,

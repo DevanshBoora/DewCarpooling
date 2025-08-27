@@ -4,11 +4,11 @@ import { createStackNavigator, CardStyleInterpolators, TransitionPresets } from 
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StyleSheet, ActivityIndicator, View } from 'react-native';
+import { StyleSheet, ActivityIndicator, View, Platform, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ToastProvider } from './src/context/ToastContext';
-import { RootStackParamList, AuthStackParamList } from './src/types/navigation';
+import { AuthStackParamList } from './src/types/navigation';
 import FadeOnFocus from './src/components/FadeOnFocus';
 
 import {
@@ -30,9 +30,32 @@ import {
   ProfileSetupScreen,
 } from './src/screens';
 import DriverVerificationScreen from './src/screens/DriverVerificationScreenSimple';
+// Lazy-load the ScanLicense screen to avoid initializing the native module at startup
+const ScanLicenseScreen = React.lazy(() => import('./src/screens/ScanLicenseScreen'));
+
+const ScanLicenseWrapper = () => {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.container}>
+        <Text style={{ color: '#fff' }}>License scanning is not supported on web.</Text>
+      </View>
+    );
+  }
+  return (
+    <React.Suspense
+      fallback={
+        <View style={styles.container}>
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
+      }
+    >
+      <ScanLicenseScreen />
+    </React.Suspense>
+  );
+};
 
 const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator<RootStackParamList>();
+const Stack = createStackNavigator();
 const AuthStack = createStackNavigator<AuthStackParamList>();
 
 const defaultStackOptions = {
@@ -115,6 +138,7 @@ const AccountStack = () => (
     <Stack.Screen name="Help" component={HelpScreen} options={{ title: 'Help & Support' }} />
     <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: false }} />
     <Stack.Screen name="DriverVerification" component={DriverVerificationScreen} options={{ headerShown: false }} />
+    <Stack.Screen name="ScanLicense" component={ScanLicenseWrapper} options={{ headerShown: false }} />
   </Stack.Navigator>
 );
 

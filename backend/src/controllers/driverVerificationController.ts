@@ -28,12 +28,12 @@ export const submitDriverVerification = async (req: AuthedRequest, res: Response
       vehicle: {
         make: string;
         model: string;
-        year: number;
+        year?: number;
         color: string;
         licensePlate: string;
         registrationImageId?: string;
         insuranceImageId?: string;
-        insuranceExpiryDate: string;
+        insuranceExpiryDate?: string;
       };
     };
 
@@ -49,18 +49,16 @@ export const submitDriverVerification = async (req: AuthedRequest, res: Response
     
     if (!vehicle?.make?.trim()) errors.vehicleMake = 'Vehicle make is required';
     if (!vehicle?.model?.trim()) errors.vehicleModel = 'Vehicle model is required';
-    if (!vehicle?.year || vehicle.year < 2000) errors.vehicleYear = 'Valid vehicle year is required';
+    // Year is optional now
     if (!vehicle?.color?.trim()) errors.vehicleColor = 'Vehicle color is required';
     if (!vehicle?.licensePlate?.trim()) errors.licensePlate = 'License plate is required';
-    if (!vehicle?.insuranceExpiryDate) errors.insuranceExpiry = 'Insurance expiry date is required';
+    // Insurance expiry is optional now
 
     // Check if license and insurance are not expired
     const licenseExpiry = new Date(drivingLicense.expiryDate);
-    const insuranceExpiry = new Date(vehicle.insuranceExpiryDate);
     const now = new Date();
 
     if (licenseExpiry <= now) errors.licenseExpiry = 'Driving license has expired';
-    if (insuranceExpiry <= now) errors.insuranceExpiry = 'Vehicle insurance has expired';
 
     if (Object.keys(errors).length) {
       return res.status(422).json({ message: 'Validation failed', errors });
@@ -92,7 +90,6 @@ export const submitDriverVerification = async (req: AuthedRequest, res: Response
       },
       vehicle: {
         ...vehicle,
-        insuranceExpiryDate: insuranceExpiry,
         verificationStatus: 'pending' as const
       },
       backgroundCheck: {

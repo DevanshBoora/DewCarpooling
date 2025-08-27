@@ -30,7 +30,7 @@
       }
     },
     "android": {
-      "package": "dew",
+      "package": "com.dew.app",
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "CAMERA",
@@ -50,7 +50,16 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "kotlinVersion": "1.9.24"
+          }
+        }
+      ]
     ],
     "extra": {
       "googleMapsApiKey": "AIzaSyBFGtJSCt7UhpCUmssgnoQkTFboTL3vIcY"

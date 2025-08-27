@@ -37,12 +37,12 @@ export interface IDriverVerification extends Document {
   vehicle: {
     make: string;
     model: string;
-    year: number;
+    year?: number;
     color: string;
     licensePlate: string;
     registrationImageId?: string; // GridFS file ID
     insuranceImageId?: string; // GridFS file ID
-    insuranceExpiryDate: Date;
+    insuranceExpiryDate?: Date;
     verificationStatus: 'pending' | 'verified' | 'rejected';
     verificationNotes?: string;
   };
@@ -109,12 +109,12 @@ const DriverVerificationSchema: Schema = new Schema({
   vehicle: {
     make: { type: String, required: true },
     model: { type: String, required: true },
-    year: { type: Number, required: true, min: 2000, max: new Date().getFullYear() + 1 },
+    year: { type: Number, required: false, min: 1900, max: new Date().getFullYear() + 1 },
     color: { type: String, required: true },
     licensePlate: { type: String, required: true },
     registrationImageId: { type: String },
     insuranceImageId: { type: String },
-    insuranceExpiryDate: { type: Date, required: true },
+    insuranceExpiryDate: { type: Date, required: false },
     verificationStatus: { 
       type: String, 
       enum: ['pending', 'verified', 'rejected'], 
